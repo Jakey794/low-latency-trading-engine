@@ -39,8 +39,36 @@ pub enum RejectReason {
     UnknownOrder,
     EmptyBook,
     InvalidOrder,
+    MatchingNotImplemented,
     RiskLimitBreached,
     KillSwitchActive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ExecutionReport {
+    Accepted {
+        order_id: OrderId,
+    },
+    Filled {
+        order_id: OrderId,
+        qty: Qty,
+        price: PriceTicks,
+    },
+    PartiallyFilled {
+        order_id: OrderId,
+        qty: Qty,
+        remaining: Qty,
+        price: PriceTicks,
+    },
+    Rested {
+        order_id: OrderId,
+        remaining: Qty,
+    },
+    Rejected {
+        order_id: OrderId,
+        reason: RejectReason,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,5 +171,19 @@ mod tests {
             serde_json::from_str(&json).expect("trade event should deserialize");
 
         assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn execution_report_serialization_round_trips() {
+        let report = ExecutionReport::Rested {
+            order_id: 1001,
+            remaining: Qty(25),
+        };
+
+        let json = serde_json::to_string(&report).expect("execution report should serialize");
+        let decoded: ExecutionReport =
+            serde_json::from_str(&json).expect("execution report should deserialize");
+
+        assert_eq!(decoded, report);
     }
 }

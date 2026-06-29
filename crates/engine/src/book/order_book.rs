@@ -117,38 +117,13 @@ impl OrderBook {
     }
 
     pub fn add_limit_order(&mut self, order: Order) -> Result<(), BookError> {
-        if self.order_index.contains_key(&order.order_id) {
-            return Err(BookError::DuplicateOrderId(order.order_id));
-        }
-
-        if order.qty == Qty(0) {
-            return Err(BookError::InvalidQuantity(order.qty));
-        }
-
-        if order.symbol != self.symbol {
-            return Err(BookError::SymbolMismatch {
-                expected: self.symbol.clone(),
-                actual: order.symbol,
-            });
-        }
-
-        if order.order_type != OrderType::Limit {
-            return Err(BookError::NotLimitOrder(order.order_id));
-        }
-
-        let price = order.price.ok_or(BookError::MissingPrice(order.order_id))?;
+        let price = self.validate_limit_order(&order)?;
         let order_id = order.order_id;
         let side = order.side;
         let levels = match side {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
         };
-        if levels
-            .get(&price)
-            .is_some_and(|level| level.total_qty().0.checked_add(order.qty.0).is_none())
-        {
-            return Err(BookError::QuantityOverflow(price));
-        }
 
         let resting_order = RestingOrder {
             order_id,
@@ -170,6 +145,41 @@ impl OrderBook {
         debug_assert!(self.check_invariants().is_ok());
 
         Ok(())
+    }
+
+    pub(crate) fn validate_limit_order(&self, order: &Order) -> Result<PriceTicks, BookError> {
+        if self.order_index.contains_key(&order.order_id) {
+            return Err(BookError::DuplicateOrderId(order.order_id));
+        }
+
+        if order.qty == Qty(0) {
+            return Err(BookError::InvalidQuantity(order.qty));
+        }
+
+        if order.symbol != self.symbol {
+            return Err(BookError::SymbolMismatch {
+                expected: self.symbol.clone(),
+                actual: order.symbol.clone(),
+            });
+        }
+
+        if order.order_type != OrderType::Limit {
+            return Err(BookError::NotLimitOrder(order.order_id));
+        }
+
+        let price = order.price.ok_or(BookError::MissingPrice(order.order_id))?;
+        let levels = match order.side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        if levels
+            .get(&price)
+            .is_some_and(|level| level.total_qty().0.checked_add(order.qty.0).is_none())
+        {
+            return Err(BookError::QuantityOverflow(price));
+        }
+
+        Ok(price)
     }
 
     pub fn best_bid(&self) -> Option<PriceTicks> {
