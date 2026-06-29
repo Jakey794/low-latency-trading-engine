@@ -29,7 +29,7 @@ impl MatchingEngine {
             }
         };
 
-        if self.would_cross(order.side, price) {
+        if self.can_cross(order.side, price) {
             return vec![ExecutionReport::Rejected {
                 order_id,
                 reason: RejectReason::MatchingNotImplemented,
@@ -56,11 +56,19 @@ impl MatchingEngine {
         &self.book
     }
 
-    fn would_cross(&self, side: Side, price: PriceTicks) -> bool {
+    fn best_opposite_price(&self, side: Side) -> Option<PriceTicks> {
         match side {
-            Side::Buy => self.book.best_ask().is_some_and(|ask| price >= ask),
-            Side::Sell => self.book.best_bid().is_some_and(|bid| price <= bid),
+            Side::Buy => self.book.best_ask(),
+            Side::Sell => self.book.best_bid(),
         }
+    }
+
+    fn can_cross(&self, side: Side, limit_price: PriceTicks) -> bool {
+        self.best_opposite_price(side)
+            .is_some_and(|opposite_price| match side {
+                Side::Buy => limit_price >= opposite_price,
+                Side::Sell => limit_price <= opposite_price,
+            })
     }
 }
 
@@ -85,6 +93,74 @@ mod tests {
             timestamp_ns: order_id,
             strategy_id: None,
         }
+    }
+
+    fn engine_with_ask(price: i64) -> MatchingEngine {
+        let mut engine = MatchingEngine::new(symbol());
+        engine.submit_limit_order(order(1, Side::Sell, Some(price), 10));
+        engine
+    }
+
+    fn engine_with_bid(price: i64) -> MatchingEngine {
+        let mut engine = MatchingEngine::new(symbol());
+        engine.submit_limit_order(order(1, Side::Buy, Some(price), 10));
+        engine
+    }
+
+    #[test]
+    fn buy_without_ask_does_not_cross() {
+        let engine = MatchingEngine::new(symbol());
+
+        assert!(!engine.can_cross(Side::Buy, PriceTicks(100)));
+    }
+
+    #[test]
+    fn sell_without_bid_does_not_cross() {
+        let engine = MatchingEngine::new(symbol());
+
+        assert!(!engine.can_cross(Side::Sell, PriceTicks(100)));
+    }
+
+    #[test]
+    fn buy_below_ask_does_not_cross() {
+        let engine = engine_with_ask(100);
+
+        assert!(!engine.can_cross(Side::Buy, PriceTicks(99)));
+    }
+
+    #[test]
+    fn buy_at_ask_crosses() {
+        let engine = engine_with_ask(100);
+
+        assert!(engine.can_cross(Side::Buy, PriceTicks(100)));
+    }
+
+    #[test]
+    fn buy_above_ask_crosses() {
+        let engine = engine_with_ask(100);
+
+        assert!(engine.can_cross(Side::Buy, PriceTicks(101)));
+    }
+
+    #[test]
+    fn sell_above_bid_does_not_cross() {
+        let engine = engine_with_bid(100);
+
+        assert!(!engine.can_cross(Side::Sell, PriceTicks(101)));
+    }
+
+    #[test]
+    fn sell_at_bid_crosses() {
+        let engine = engine_with_bid(100);
+
+        assert!(engine.can_cross(Side::Sell, PriceTicks(100)));
+    }
+
+    #[test]
+    fn sell_below_bid_crosses() {
+        let engine = engine_with_bid(100);
+
+        assert!(engine.can_cross(Side::Sell, PriceTicks(99)));
     }
 
     #[test]
