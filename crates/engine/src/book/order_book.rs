@@ -200,6 +200,51 @@ impl OrderBook {
         levels.get(&location.price)?.get_order(order_id)
     }
 
+    pub(crate) fn best_opposite_order(&self, incoming_side: Side) -> Option<&RestingOrder> {
+        let price = match incoming_side {
+            Side::Buy => self.best_ask()?,
+            Side::Sell => self.best_bid()?,
+        };
+        let levels = match incoming_side {
+            Side::Buy => &self.asks,
+            Side::Sell => &self.bids,
+        };
+
+        levels.get(&price)?.front()
+    }
+
+    pub(crate) fn remove_best_opposite(&mut self, incoming_side: Side) -> Option<RestingOrder> {
+        let price = match incoming_side {
+            Side::Buy => self.best_ask()?,
+            Side::Sell => self.best_bid()?,
+        };
+        let levels = match incoming_side {
+            Side::Buy => &mut self.asks,
+            Side::Sell => &mut self.bids,
+        };
+        let (resting_order, level_is_empty) = {
+            let level = levels.get_mut(&price)?;
+            let resting_order = level.pop_front()?;
+            (resting_order, level.is_empty())
+        };
+
+        if level_is_empty {
+            levels.remove(&price);
+        }
+
+        let removed_location = self.order_index.remove(&resting_order.order_id);
+        debug_assert_eq!(
+            removed_location,
+            Some(OrderLocation {
+                side: resting_order.side,
+                price: resting_order.price,
+            })
+        );
+        debug_assert!(self.check_invariants().is_ok());
+
+        Some(resting_order)
+    }
+
     pub fn snapshot(&self, depth: usize) -> BookSnapshot {
         let bids = self
             .bids
@@ -565,6 +610,37 @@ mod tests {
             book.get_order(8),
             Some(&resting_order(8, Side::Sell, 105, 30))
         );
+    }
+
+    #[test]
+    fn remove_best_opposite_for_buy_removes_best_ask_and_index_entry() {
+        let mut book = OrderBook::new(symbol());
+        book.add_limit_order(limit_order(1, Side::Sell, 100, 10))
+            .unwrap();
+        book.add_limit_order(limit_order(2, Side::Sell, 101, 20))
+            .unwrap();
+
+        let removed = book.remove_best_opposite(Side::Buy);
+
+        assert_eq!(removed, Some(resting_order(1, Side::Sell, 100, 10)));
+        assert_eq!(book.get_order(1), None);
+        assert_eq!(book.best_ask(), Some(PriceTicks(101)));
+        assert_eq!(book.check_invariants(), Ok(()));
+    }
+
+    #[test]
+    fn remove_best_opposite_for_sell_removes_best_bid_and_empty_level() {
+        let mut book = OrderBook::new(symbol());
+        book.add_limit_order(limit_order(1, Side::Buy, 100, 10))
+            .unwrap();
+
+        let removed = book.remove_best_opposite(Side::Sell);
+
+        assert_eq!(removed, Some(resting_order(1, Side::Buy, 100, 10)));
+        assert_eq!(book.get_order(1), None);
+        assert_eq!(book.best_bid(), None);
+        assert!(book.bids.is_empty());
+        assert_eq!(book.check_invariants(), Ok(()));
     }
 
     #[test]

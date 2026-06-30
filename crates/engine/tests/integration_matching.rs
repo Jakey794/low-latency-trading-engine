@@ -70,3 +70,100 @@ fn submit_non_crossing_sell_rests() {
         Some(Qty(30))
     );
 }
+
+#[test]
+fn buy_limit_fully_fills_against_best_ask() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 10));
+
+    let reports = engine.submit_limit_order(limit_order(2, Side::Buy, 100, 10));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 2 },
+            ExecutionReport::Filled {
+                order_id: 2,
+                qty: Qty(10),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(engine.book().best_ask(), None);
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(2), None);
+}
+
+#[test]
+fn sell_limit_fully_fills_against_best_bid() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Buy, 100, 10));
+
+    let reports = engine.submit_limit_order(limit_order(2, Side::Sell, 100, 10));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 2 },
+            ExecutionReport::Filled {
+                order_id: 2,
+                qty: Qty(10),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(engine.book().best_bid(), None);
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(2), None);
+}
+
+#[test]
+fn trade_price_is_resting_order_price() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 10));
+
+    let reports = engine.submit_limit_order(limit_order(2, Side::Buy, 105, 10));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 2 },
+            ExecutionReport::Filled {
+                order_id: 2,
+                qty: Qty(10),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+}
+
+#[test]
+fn fully_filled_resting_order_removed_from_book() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 10));
+    engine.submit_limit_order(limit_order(3, Side::Sell, 102, 5));
+
+    engine.submit_limit_order(limit_order(2, Side::Buy, 100, 10));
+
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().best_ask(), Some(PriceTicks(102)));
+    assert_eq!(
+        engine.book().get_order(3).map(|order| order.qty),
+        Some(Qty(5))
+    );
+}
+
+#[test]
+fn fully_filled_incoming_order_does_not_rest() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 10));
+
+    let reports = engine.submit_limit_order(limit_order(2, Side::Buy, 100, 10));
+
+    assert_eq!(engine.book().get_order(2), None);
+    assert_eq!(engine.book().best_bid(), None);
+    assert!(engine.book().snapshot(usize::MAX).bids.is_empty());
+    assert!(reports
+        .iter()
+        .all(|report| !matches!(report, ExecutionReport::Rested { .. })));
+}

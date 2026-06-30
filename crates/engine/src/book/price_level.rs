@@ -30,6 +30,10 @@ impl PriceLevel {
         self.orders.front()
     }
 
+    pub(crate) fn pop_front(&mut self) -> Option<RestingOrder> {
+        self.orders.pop_front()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.orders.len()
     }
@@ -102,6 +106,19 @@ mod tests {
         level.push_back(resting_order(11));
 
         assert_eq!(level.front().map(|order| order.order_id), Some(10));
+    }
+
+    #[test]
+    fn pop_front_removes_earliest_order() {
+        let mut level = PriceLevel::new(PRICE);
+        level.push_back(resting_order(10));
+        level.push_back(resting_order(11));
+
+        let removed = level.pop_front();
+
+        assert_eq!(removed.map(|order| order.order_id), Some(10));
+        assert_eq!(level.front().map(|order| order.order_id), Some(11));
+        assert_eq!(level.len(), 1);
     }
 
     #[test]

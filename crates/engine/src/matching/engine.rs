@@ -30,10 +30,34 @@ impl MatchingEngine {
         };
 
         if self.can_cross(order.side, price) {
-            return vec![ExecutionReport::Rejected {
-                order_id,
-                reason: RejectReason::MatchingNotImplemented,
-            }];
+            let resting_order = self
+                .book
+                .best_opposite_order(order.side)
+                .expect("crossing order must have opposing liquidity");
+
+            if remaining != resting_order.qty {
+                return vec![ExecutionReport::Rejected {
+                    order_id,
+                    reason: RejectReason::MatchingNotImplemented,
+                }];
+            }
+
+            let resting_price = resting_order.price;
+            let removed_order = self
+                .book
+                .remove_best_opposite(order.side)
+                .expect("best opposing order must be removable");
+            debug_assert_eq!(removed_order.qty, remaining);
+            debug_assert_eq!(removed_order.price, resting_price);
+
+            return vec![
+                ExecutionReport::Accepted { order_id },
+                ExecutionReport::Filled {
+                    order_id,
+                    qty: remaining,
+                    price: resting_price,
+                },
+            ];
         }
 
         if self.book.add_limit_order(order).is_err() {
@@ -164,12 +188,12 @@ mod tests {
     }
 
     #[test]
-    fn buy_crosses_ask_at_equal_price_without_mutating_book() {
+    fn buy_cross_with_unequal_quantity_is_rejected_without_mutating_book() {
         let mut engine = MatchingEngine::new(symbol());
         engine.submit_limit_order(order(1, Side::Sell, Some(100), 10));
         let before = engine.book().snapshot(usize::MAX);
 
-        let reports = engine.submit_limit_order(order(2, Side::Buy, Some(100), 10));
+        let reports = engine.submit_limit_order(order(2, Side::Buy, Some(100), 5));
 
         assert_eq!(
             reports,
@@ -183,12 +207,12 @@ mod tests {
     }
 
     #[test]
-    fn sell_crosses_bid_at_equal_price_without_mutating_book() {
+    fn sell_cross_with_unequal_quantity_is_rejected_without_mutating_book() {
         let mut engine = MatchingEngine::new(symbol());
         engine.submit_limit_order(order(1, Side::Buy, Some(100), 10));
         let before = engine.book().snapshot(usize::MAX);
 
-        let reports = engine.submit_limit_order(order(2, Side::Sell, Some(100), 10));
+        let reports = engine.submit_limit_order(order(2, Side::Sell, Some(100), 15));
 
         assert_eq!(
             reports,
