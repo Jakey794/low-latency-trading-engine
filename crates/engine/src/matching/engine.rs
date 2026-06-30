@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use crate::{
     book::OrderBook,
     events::{ExecutionReport, RejectReason},
@@ -30,25 +32,38 @@ impl MatchingEngine {
         };
 
         if self.can_cross(order.side, price) {
-            let resting_order = self
-                .book
-                .best_opposite_order(order.side)
-                .expect("crossing order must have opposing liquidity");
+            let (resting_qty, resting_price) = {
+                let resting_order = self
+                    .book
+                    .best_opposite_order(order.side)
+                    .expect("crossing order must have opposing liquidity");
+                (resting_order.qty, resting_order.price)
+            };
 
-            if remaining != resting_order.qty {
-                return vec![ExecutionReport::Rejected {
-                    order_id,
-                    reason: RejectReason::MatchingNotImplemented,
-                }];
+            match remaining.cmp(&resting_qty) {
+                Ordering::Less => {
+                    let updated_order = self
+                        .book
+                        .reduce_best_opposite_qty(order.side, remaining)
+                        .expect("larger resting order must be reducible");
+                    debug_assert_eq!(updated_order.price, resting_price);
+                    debug_assert_eq!(updated_order.qty.0, resting_qty.0 - remaining.0);
+                }
+                Ordering::Equal => {
+                    let removed_order = self
+                        .book
+                        .remove_best_opposite(order.side)
+                        .expect("best opposing order must be removable");
+                    debug_assert_eq!(removed_order.qty, remaining);
+                    debug_assert_eq!(removed_order.price, resting_price);
+                }
+                Ordering::Greater => {
+                    return vec![ExecutionReport::Rejected {
+                        order_id,
+                        reason: RejectReason::MatchingNotImplemented,
+                    }];
+                }
             }
-
-            let resting_price = resting_order.price;
-            let removed_order = self
-                .book
-                .remove_best_opposite(order.side)
-                .expect("best opposing order must be removable");
-            debug_assert_eq!(removed_order.qty, remaining);
-            debug_assert_eq!(removed_order.price, resting_price);
 
             return vec![
                 ExecutionReport::Accepted { order_id },
@@ -193,7 +208,7 @@ mod tests {
         engine.submit_limit_order(order(1, Side::Sell, Some(100), 10));
         let before = engine.book().snapshot(usize::MAX);
 
-        let reports = engine.submit_limit_order(order(2, Side::Buy, Some(100), 5));
+        let reports = engine.submit_limit_order(order(2, Side::Buy, Some(100), 15));
 
         assert_eq!(
             reports,

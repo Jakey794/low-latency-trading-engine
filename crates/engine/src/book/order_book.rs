@@ -245,6 +245,45 @@ impl OrderBook {
         Some(resting_order)
     }
 
+    pub(crate) fn reduce_best_opposite_qty(
+        &mut self,
+        incoming_side: Side,
+        fill_qty: Qty,
+    ) -> Option<RestingOrder> {
+        if fill_qty == Qty(0) {
+            return None;
+        }
+
+        let price = match incoming_side {
+            Side::Buy => self.best_ask()?,
+            Side::Sell => self.best_bid()?,
+        };
+        let levels = match incoming_side {
+            Side::Buy => &mut self.asks,
+            Side::Sell => &mut self.bids,
+        };
+        let updated_order = {
+            let resting_order = levels.get_mut(&price)?.front_mut()?;
+            let remaining = resting_order.qty.0.checked_sub(fill_qty.0)?;
+            if remaining == 0 {
+                return None;
+            }
+            resting_order.qty = Qty(remaining);
+            resting_order.clone()
+        };
+
+        debug_assert_eq!(
+            self.order_index.get(&updated_order.order_id),
+            Some(&OrderLocation {
+                side: updated_order.side,
+                price: updated_order.price,
+            })
+        );
+        debug_assert!(self.check_invariants().is_ok());
+
+        Some(updated_order)
+    }
+
     pub fn snapshot(&self, depth: usize) -> BookSnapshot {
         let bids = self
             .bids
@@ -640,6 +679,24 @@ mod tests {
         assert_eq!(book.get_order(1), None);
         assert_eq!(book.best_bid(), None);
         assert!(book.bids.is_empty());
+        assert_eq!(book.check_invariants(), Ok(()));
+    }
+
+    #[test]
+    fn reduce_best_opposite_updates_quantity_without_moving_or_unindexing_order() {
+        let mut book = OrderBook::new(symbol());
+        book.add_limit_order(limit_order(1, Side::Sell, 100, 10))
+            .unwrap();
+        book.add_limit_order(limit_order(2, Side::Sell, 100, 20))
+            .unwrap();
+
+        let updated = book.reduce_best_opposite_qty(Side::Buy, Qty(4));
+
+        assert_eq!(updated, Some(resting_order(1, Side::Sell, 100, 6)));
+        assert_eq!(book.get_order(1), updated.as_ref());
+        assert_eq!(book.best_ask(), Some(PriceTicks(100)));
+        assert_eq!(book.snapshot(1).asks[0].order_ids, vec![1, 2]);
+        assert_eq!(book.snapshot(1).asks[0].total_qty, Qty(26));
         assert_eq!(book.check_invariants(), Ok(()));
     }
 

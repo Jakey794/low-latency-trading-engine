@@ -30,6 +30,10 @@ impl PriceLevel {
         self.orders.front()
     }
 
+    pub(crate) fn front_mut(&mut self) -> Option<&mut RestingOrder> {
+        self.orders.front_mut()
+    }
+
     pub(crate) fn pop_front(&mut self) -> Option<RestingOrder> {
         self.orders.pop_front()
     }
@@ -106,6 +110,21 @@ mod tests {
         level.push_back(resting_order(11));
 
         assert_eq!(level.front().map(|order| order.order_id), Some(10));
+    }
+
+    #[test]
+    fn front_mut_updates_quantity_without_changing_fifo_order() {
+        let mut level = PriceLevel::new(PRICE);
+        level.push_back(resting_order(10));
+        level.push_back(resting_order(11));
+
+        level.front_mut().unwrap().qty = Qty(6);
+
+        let orders: Vec<_> = level
+            .iter()
+            .map(|order| (order.order_id, order.qty))
+            .collect();
+        assert_eq!(orders, vec![(10, Qty(6)), (11, Qty(10))]);
     }
 
     #[test]
