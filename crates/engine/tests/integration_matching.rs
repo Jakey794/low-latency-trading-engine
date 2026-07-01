@@ -493,3 +493,186 @@ fn fill_reports_are_in_matching_order() {
         ]
     );
 }
+
+#[test]
+fn buy_residual_rests_after_consuming_all_asks() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 5));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 10));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(5),
+                remaining: Qty(5),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Rested {
+                order_id: 10,
+                remaining: Qty(5),
+            },
+        ]
+    );
+    assert_eq!(engine.book().best_ask(), None);
+    assert_eq!(engine.book().best_bid(), Some(PriceTicks(100)));
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(
+        engine.book().get_order(10).map(|order| order.qty),
+        Some(Qty(5))
+    );
+}
+
+#[test]
+fn sell_residual_rests_after_consuming_all_bids() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Buy, 100, 5));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Sell, 100, 10));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(5),
+                remaining: Qty(5),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Rested {
+                order_id: 10,
+                remaining: Qty(5),
+            },
+        ]
+    );
+    assert_eq!(engine.book().best_bid(), None);
+    assert_eq!(engine.book().best_ask(), Some(PriceTicks(100)));
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(
+        engine.book().get_order(10).map(|order| order.qty),
+        Some(Qty(5))
+    );
+}
+
+#[test]
+fn fully_filled_order_does_not_rest() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 5));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 5));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(5),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(engine.book().get_order(10), None);
+    assert_eq!(engine.book().best_bid(), None);
+    assert!(reports
+        .iter()
+        .all(|report| !matches!(report, ExecutionReport::Rested { .. })));
+}
+
+#[test]
+fn residual_order_has_correct_remaining_qty() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 99, 2));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 100, 3));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 8));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(2),
+                remaining: Qty(6),
+                price: PriceTicks(99),
+            },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(3),
+                remaining: Qty(3),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Rested {
+                order_id: 10,
+                remaining: Qty(3),
+            },
+        ]
+    );
+    let best_bid = &engine.book().snapshot(1).bids[0];
+    assert_eq!(best_bid.price, PriceTicks(100));
+    assert_eq!(best_bid.total_qty, Qty(3));
+    assert_eq!(best_bid.order_ids, vec![10]);
+    assert_eq!(
+        engine.book().get_order(10).map(|order| order.qty),
+        Some(Qty(3))
+    );
+}
+
+#[test]
+fn residual_order_has_new_time_priority_at_its_price() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 5));
+    engine.submit_limit_order(limit_order(10, Side::Buy, 100, 10));
+
+    let later_reports = engine.submit_limit_order(limit_order(11, Side::Buy, 100, 2));
+
+    assert_eq!(
+        later_reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 11 },
+            ExecutionReport::Rested {
+                order_id: 11,
+                remaining: Qty(2),
+            },
+        ]
+    );
+    let best_bid = &engine.book().snapshot(1).bids[0];
+    assert_eq!(best_bid.order_ids, vec![10, 11]);
+    assert_eq!(best_bid.total_qty, Qty(7));
+}
+
+#[test]
+fn book_not_crossed_after_residual_rest() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 99, 5));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 101, 5));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 10));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(5),
+                remaining: Qty(5),
+                price: PriceTicks(99),
+            },
+            ExecutionReport::Rested {
+                order_id: 10,
+                remaining: Qty(5),
+            },
+        ]
+    );
+    let best_bid = engine.book().best_bid().unwrap();
+    let best_ask = engine.book().best_ask().unwrap();
+    assert_eq!(best_bid, PriceTicks(100));
+    assert_eq!(best_ask, PriceTicks(101));
+    assert!(best_bid < best_ask);
+}
