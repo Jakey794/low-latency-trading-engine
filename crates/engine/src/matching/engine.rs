@@ -1,9 +1,7 @@
-use std::cmp::Ordering;
-
 use crate::{
     book::OrderBook,
     events::{ExecutionReport, RejectReason},
-    types::{Order, PriceTicks, Side, Symbol},
+    types::{Order, PriceTicks, Qty, Side, Symbol},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,9 +16,9 @@ impl MatchingEngine {
         }
     }
 
-    pub fn submit_limit_order(&mut self, order: Order) -> Vec<ExecutionReport> {
+    pub fn submit_limit_order(&mut self, mut order: Order) -> Vec<ExecutionReport> {
         let order_id = order.order_id;
-        let remaining = order.qty;
+        let mut remaining = order.qty;
         let price = match self.book.validate_limit_order(&order) {
             Ok(price) => price,
             Err(_) => {
@@ -31,7 +29,16 @@ impl MatchingEngine {
             }
         };
 
-        if self.can_cross(order.side, price) {
+        let mut reports = vec![ExecutionReport::Accepted { order_id }];
+
+        while remaining != Qty(0) {
+            let Some(opposite_price) = self.best_opposite_price(order.side) else {
+                break;
+            };
+            if !self.can_cross(order.side, price) {
+                break;
+            }
+
             let (resting_qty, resting_price) = {
                 let resting_order = self
                     .book
@@ -39,56 +46,58 @@ impl MatchingEngine {
                     .expect("crossing order must have opposing liquidity");
                 (resting_order.qty, resting_order.price)
             };
+            debug_assert_eq!(resting_price, opposite_price);
 
-            match remaining.cmp(&resting_qty) {
-                Ordering::Less => {
-                    let updated_order = self
-                        .book
-                        .reduce_best_opposite_qty(order.side, remaining)
-                        .expect("larger resting order must be reducible");
-                    debug_assert_eq!(updated_order.price, resting_price);
-                    debug_assert_eq!(updated_order.qty.0, resting_qty.0 - remaining.0);
-                }
-                Ordering::Equal => {
-                    let removed_order = self
-                        .book
-                        .remove_best_opposite(order.side)
-                        .expect("best opposing order must be removable");
-                    debug_assert_eq!(removed_order.qty, remaining);
-                    debug_assert_eq!(removed_order.price, resting_price);
-                }
-                Ordering::Greater => {
-                    return vec![ExecutionReport::Rejected {
-                        order_id,
-                        reason: RejectReason::MatchingNotImplemented,
-                    }];
-                }
+            let fill_qty = Qty(remaining.0.min(resting_qty.0));
+
+            if fill_qty == resting_qty {
+                let removed_order = self
+                    .book
+                    .remove_best_opposite(order.side)
+                    .expect("best opposing order must be removable");
+                debug_assert_eq!(removed_order.qty, fill_qty);
+                debug_assert_eq!(removed_order.price, resting_price);
+            } else {
+                let updated_order = self
+                    .book
+                    .reduce_best_opposite_qty(order.side, fill_qty)
+                    .expect("larger resting order must be reducible");
+                debug_assert_eq!(updated_order.price, resting_price);
+                debug_assert_eq!(updated_order.qty.0, resting_qty.0 - fill_qty.0);
             }
 
-            return vec![
-                ExecutionReport::Accepted { order_id },
-                ExecutionReport::Filled {
+            remaining = Qty(remaining.0 - fill_qty.0);
+
+            if remaining == Qty(0) {
+                reports.push(ExecutionReport::Filled {
                     order_id,
-                    qty: remaining,
+                    qty: fill_qty,
                     price: resting_price,
-                },
-            ];
+                });
+            } else {
+                reports.push(ExecutionReport::PartiallyFilled {
+                    order_id,
+                    qty: fill_qty,
+                    remaining,
+                    price: resting_price,
+                });
+            }
         }
 
-        if self.book.add_limit_order(order).is_err() {
-            return vec![ExecutionReport::Rejected {
-                order_id,
-                reason: RejectReason::InvalidOrder,
-            }];
-        }
-
-        vec![
-            ExecutionReport::Accepted { order_id },
-            ExecutionReport::Rested {
+        if remaining != Qty(0) {
+            order.qty = remaining;
+            self.book
+                .add_limit_order(order)
+                .expect("validated residual order must be able to rest");
+            reports.push(ExecutionReport::Rested {
                 order_id,
                 remaining,
-            },
-        ]
+            });
+        }
+
+        debug_assert!(self.book_is_uncrossed());
+
+        reports
     }
 
     pub fn book(&self) -> &OrderBook {
@@ -104,10 +113,21 @@ impl MatchingEngine {
 
     fn can_cross(&self, side: Side, limit_price: PriceTicks) -> bool {
         self.best_opposite_price(side)
-            .is_some_and(|opposite_price| match side {
-                Side::Buy => limit_price >= opposite_price,
-                Side::Sell => limit_price <= opposite_price,
-            })
+            .is_some_and(|opposite_price| Self::prices_cross(side, limit_price, opposite_price))
+    }
+
+    fn prices_cross(side: Side, limit_price: PriceTicks, opposite_price: PriceTicks) -> bool {
+        match side {
+            Side::Buy => limit_price >= opposite_price,
+            Side::Sell => limit_price <= opposite_price,
+        }
+    }
+
+    fn book_is_uncrossed(&self) -> bool {
+        match (self.book.best_bid(), self.book.best_ask()) {
+            (Some(best_bid), Some(best_ask)) => best_bid < best_ask,
+            _ => true,
+        }
     }
 }
 
@@ -203,41 +223,63 @@ mod tests {
     }
 
     #[test]
-    fn buy_cross_with_unequal_quantity_is_rejected_without_mutating_book() {
+    fn buy_larger_than_available_book_rests_residual() {
         let mut engine = MatchingEngine::new(symbol());
         engine.submit_limit_order(order(1, Side::Sell, Some(100), 10));
-        let before = engine.book().snapshot(usize::MAX);
 
         let reports = engine.submit_limit_order(order(2, Side::Buy, Some(100), 15));
 
         assert_eq!(
             reports,
-            vec![ExecutionReport::Rejected {
-                order_id: 2,
-                reason: RejectReason::MatchingNotImplemented,
-            }]
+            vec![
+                ExecutionReport::Accepted { order_id: 2 },
+                ExecutionReport::PartiallyFilled {
+                    order_id: 2,
+                    qty: Qty(10),
+                    remaining: Qty(5),
+                    price: PriceTicks(100),
+                },
+                ExecutionReport::Rested {
+                    order_id: 2,
+                    remaining: Qty(5),
+                },
+            ]
         );
-        assert_eq!(engine.book().snapshot(usize::MAX), before);
-        assert_eq!(engine.book().get_order(2), None);
+        assert_eq!(engine.book().get_order(1), None);
+        assert_eq!(
+            engine.book().get_order(2).map(|order| order.qty),
+            Some(Qty(5))
+        );
     }
 
     #[test]
-    fn sell_cross_with_unequal_quantity_is_rejected_without_mutating_book() {
+    fn sell_larger_than_available_book_rests_residual() {
         let mut engine = MatchingEngine::new(symbol());
         engine.submit_limit_order(order(1, Side::Buy, Some(100), 10));
-        let before = engine.book().snapshot(usize::MAX);
 
         let reports = engine.submit_limit_order(order(2, Side::Sell, Some(100), 15));
 
         assert_eq!(
             reports,
-            vec![ExecutionReport::Rejected {
-                order_id: 2,
-                reason: RejectReason::MatchingNotImplemented,
-            }]
+            vec![
+                ExecutionReport::Accepted { order_id: 2 },
+                ExecutionReport::PartiallyFilled {
+                    order_id: 2,
+                    qty: Qty(10),
+                    remaining: Qty(5),
+                    price: PriceTicks(100),
+                },
+                ExecutionReport::Rested {
+                    order_id: 2,
+                    remaining: Qty(5),
+                },
+            ]
         );
-        assert_eq!(engine.book().snapshot(usize::MAX), before);
-        assert_eq!(engine.book().get_order(2), None);
+        assert_eq!(engine.book().get_order(1), None);
+        assert_eq!(
+            engine.book().get_order(2).map(|order| order.qty),
+            Some(Qty(5))
+        );
     }
 
     #[test]
