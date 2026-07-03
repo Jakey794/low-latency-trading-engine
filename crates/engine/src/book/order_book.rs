@@ -58,6 +58,11 @@ pub enum BookError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum BookInvariantError {
+    #[error("crossed book: best bid {best_bid:?} is not below best ask {best_ask:?}")]
+    CrossedBook {
+        best_bid: PriceTicks,
+        best_ask: PriceTicks,
+    },
     #[error("empty {side:?} price level at {price:?}")]
     EmptyPriceLevel { side: Side, price: PriceTicks },
     #[error("order {order_id} is stored on {expected:?} but has side {actual:?}")]
@@ -396,6 +401,18 @@ impl OrderBook {
                 indexed: self.order_index.len(),
                 resting: resting_count,
             });
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn check_matching_invariants(&self) -> Result<(), BookInvariantError> {
+        self.check_invariants()?;
+
+        if let (Some(best_bid), Some(best_ask)) = (self.best_bid(), self.best_ask()) {
+            if best_bid >= best_ask {
+                return Err(BookInvariantError::CrossedBook { best_bid, best_ask });
+            }
         }
 
         Ok(())
@@ -1063,6 +1080,23 @@ mod tests {
             Err(BookInvariantError::QuantityOverflow {
                 side: Side::Buy,
                 price: PriceTicks(100),
+            })
+        );
+    }
+
+    #[test]
+    fn matching_invariant_checker_detects_crossed_book() {
+        let mut book = OrderBook::new(symbol());
+        book.add_limit_order(limit_order(1, Side::Buy, 100, 10))
+            .unwrap();
+        book.add_limit_order(limit_order(2, Side::Sell, 99, 10))
+            .unwrap();
+
+        assert_eq!(
+            book.check_matching_invariants(),
+            Err(BookInvariantError::CrossedBook {
+                best_bid: PriceTicks(100),
+                best_ask: PriceTicks(99),
             })
         );
     }

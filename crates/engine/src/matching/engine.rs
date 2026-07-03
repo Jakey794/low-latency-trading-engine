@@ -95,7 +95,7 @@ impl MatchingEngine {
             });
         }
 
-        debug_assert!(self.book_is_uncrossed());
+        debug_assert!(self.book.check_matching_invariants().is_ok());
 
         reports
     }
@@ -120,13 +120,6 @@ impl MatchingEngine {
         match side {
             Side::Buy => limit_price >= opposite_price,
             Side::Sell => limit_price <= opposite_price,
-        }
-    }
-
-    fn book_is_uncrossed(&self) -> bool {
-        match (self.book.best_bid(), self.book.best_ask()) {
-            (Some(best_bid), Some(best_ask)) => best_bid < best_ask,
-            _ => true,
         }
     }
 }

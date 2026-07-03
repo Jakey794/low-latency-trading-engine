@@ -21,6 +21,27 @@ fn limit_order(order_id: OrderId, side: Side, price: i64, qty: u64) -> Order {
     }
 }
 
+fn assert_public_book_invariants(engine: &MatchingEngine) {
+    let snapshot = engine.book().snapshot(usize::MAX);
+
+    for level in snapshot.bids.iter().chain(&snapshot.asks) {
+        assert!(level.total_qty > Qty(0));
+        assert!(level.order_count > 0);
+        assert_eq!(level.order_count, level.order_ids.len());
+        for order_id in &level.order_ids {
+            let order = engine
+                .book()
+                .get_order(*order_id)
+                .expect("snapshot order must be present in the order index");
+            assert!(order.qty > Qty(0));
+        }
+    }
+
+    if let (Some(best_bid), Some(best_ask)) = (engine.book().best_bid(), engine.book().best_ask()) {
+        assert!(best_bid < best_ask);
+    }
+}
+
 #[test]
 fn submit_non_crossing_buy_rests() {
     let mut engine = MatchingEngine::new(symbol());
@@ -675,4 +696,210 @@ fn book_not_crossed_after_residual_rest() {
     assert_eq!(best_bid, PriceTicks(100));
     assert_eq!(best_ask, PriceTicks(101));
     assert!(best_bid < best_ask);
+}
+
+#[test]
+fn scenario_simple_cross() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 5));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 5));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(5),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(10), None);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn scenario_partial_fill() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 10));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 4));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(4),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(
+        engine.book().get_order(1).map(|order| order.qty),
+        Some(Qty(6))
+    );
+    assert_eq!(engine.book().get_order(10), None);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn scenario_multi_level_fill() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 2));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 101, 3));
+    engine.submit_limit_order(limit_order(3, Side::Sell, 102, 4));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 101, 5));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(2),
+                remaining: Qty(3),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(3),
+                price: PriceTicks(101),
+            },
+        ]
+    );
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(2), None);
+    assert_eq!(engine.book().best_ask(), Some(PriceTicks(102)));
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn scenario_residual_rests() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 3));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 5));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(3),
+                remaining: Qty(2),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Rested {
+                order_id: 10,
+                remaining: Qty(2),
+            },
+        ]
+    );
+    assert_eq!(
+        engine.book().get_order(10).map(|order| order.qty),
+        Some(Qty(2))
+    );
+    assert_eq!(engine.book().best_bid(), Some(PriceTicks(100)));
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn scenario_fifo_priority() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 2));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 100, 3));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 3));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(2),
+                remaining: Qty(1),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(1),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(
+        engine.book().get_order(2).map(|order| order.qty),
+        Some(Qty(2))
+    );
+    assert_eq!(engine.book().snapshot(1).asks[0].order_ids, vec![2]);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn scenario_trade_price_is_resting_price() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 2));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 105, 2));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(2),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn scenario_book_cleanup_after_fills() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 2));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 101, 3));
+    engine.submit_limit_order(limit_order(3, Side::Sell, 102, 4));
+
+    let reports = engine.submit_limit_order(limit_order(10, Side::Buy, 101, 5));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(2),
+                remaining: Qty(3),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(3),
+                price: PriceTicks(101),
+            },
+        ]
+    );
+    let snapshot = engine.book().snapshot(usize::MAX);
+    assert_eq!(snapshot.asks.len(), 1);
+    assert_eq!(snapshot.asks[0].price, PriceTicks(102));
+    assert_eq!(snapshot.asks[0].order_ids, vec![3]);
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(2), None);
+    assert_eq!(
+        engine.book().get_order(3).map(|order| order.qty),
+        Some(Qty(4))
+    );
+    assert_public_book_invariants(&engine);
 }
