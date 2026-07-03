@@ -1,11 +1,28 @@
 use engine::{
-    events::ExecutionReport,
+    events::{ExecutionReport, InputEvent, NewOrderEvent, RejectReason},
     matching::MatchingEngine,
     types::{Order, OrderId, OrderType, PriceTicks, Qty, Side, Symbol},
 };
 
 fn symbol() -> Symbol {
     Symbol("AAPL".to_owned())
+}
+
+fn market_order(order_id: OrderId, side: Side, qty: u64) -> Order {
+    Order {
+        order_id,
+        symbol: symbol(),
+        side,
+        order_type: OrderType::Market,
+        price: None,
+        qty: Qty(qty),
+        timestamp_ns: order_id,
+        strategy_id: None,
+    }
+}
+
+fn submit_market_order(engine: &mut MatchingEngine, order: Order) -> Vec<ExecutionReport> {
+    engine.process_event(InputEvent::NewOrder(NewOrderEvent { seq: 1, order }))
 }
 
 fn limit_order(order_id: OrderId, side: Side, price: i64, qty: u64) -> Order {
@@ -900,6 +917,178 @@ fn scenario_book_cleanup_after_fills() {
     assert_eq!(
         engine.book().get_order(3).map(|order| order.qty),
         Some(Qty(4))
+    );
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn market_buy_consumes_best_ask() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 10));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 4));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(4),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(
+        engine.book().get_order(1).map(|order| order.qty),
+        Some(Qty(6))
+    );
+    assert_eq!(engine.book().get_order(10), None);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn market_sell_consumes_best_bid() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Buy, 100, 10));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Sell, 4));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(4),
+                price: PriceTicks(100),
+            },
+        ]
+    );
+    assert_eq!(
+        engine.book().get_order(1).map(|order| order.qty),
+        Some(Qty(6))
+    );
+    assert_eq!(engine.book().get_order(10), None);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn market_order_sweeps_multiple_levels() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 2));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 101, 3));
+    engine.submit_limit_order(limit_order(3, Side::Sell, 102, 4));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 7));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(2),
+                remaining: Qty(5),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(3),
+                remaining: Qty(2),
+                price: PriceTicks(101),
+            },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(2),
+                price: PriceTicks(102),
+            },
+        ]
+    );
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(2), None);
+    assert_eq!(
+        engine.book().get_order(3).map(|order| order.qty),
+        Some(Qty(2))
+    );
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn market_order_partial_fill_expires_remainder() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 3));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 5));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::PartiallyFilled {
+                order_id: 10,
+                qty: Qty(3),
+                remaining: Qty(2),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Rejected {
+                order_id: 10,
+                reason: RejectReason::MarketOrderWouldNotFill,
+            },
+        ]
+    );
+    assert_eq!(engine.book().get_order(1), None);
+    assert_eq!(engine.book().get_order(10), None);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn market_order_empty_book_rejected() {
+    let mut engine = MatchingEngine::new(symbol());
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 5));
+
+    assert_eq!(
+        reports,
+        vec![ExecutionReport::Rejected {
+            order_id: 10,
+            reason: RejectReason::EmptyBook,
+        }]
+    );
+}
+
+#[test]
+fn market_order_never_rests() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Buy, 100, 2));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Sell, 5));
+
+    assert!(reports
+        .iter()
+        .all(|report| !matches!(report, ExecutionReport::Rested { .. })));
+    assert_eq!(engine.book().get_order(10), None);
+    assert_eq!(engine.book().best_ask(), None);
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn trade_price_uses_resting_order_price() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 107, 2));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 2));
+
+    assert_eq!(
+        reports,
+        vec![
+            ExecutionReport::Accepted { order_id: 10 },
+            ExecutionReport::Filled {
+                order_id: 10,
+                qty: Qty(2),
+                price: PriceTicks(107),
+            },
+        ]
     );
     assert_public_book_invariants(&engine);
 }

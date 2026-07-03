@@ -38,10 +38,54 @@ impl MatchingEngine {
             return Self::rejected(order.order_id, RejectReason::InvalidQuantity);
         }
         if order.order_type == OrderType::Market {
-            return Self::rejected(order.order_id, RejectReason::MarketOrderWouldNotFill);
+            return self.submit_market_order(order);
         }
 
         self.submit_limit_order_inner(order, false)
+    }
+
+    fn submit_market_order(&mut self, order: Order) -> Vec<ExecutionReport> {
+        let order_id = order.order_id;
+
+        if self.book.check_matching_invariants().is_err() {
+            return Self::rejected(order_id, RejectReason::InternalBookInvariantViolation);
+        }
+        if self.filled_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyFilled);
+        }
+        if self.cancelled_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+        }
+        if self.book.get_order(order_id).is_some() || order.symbol != *self.book.symbol() {
+            return Self::rejected(order_id, RejectReason::InvalidOrder);
+        }
+        if order.price.is_some() {
+            return Self::rejected(order_id, RejectReason::InvalidPrice);
+        }
+        if self.best_opposite_price(order.side).is_none() {
+            return Self::rejected(order_id, RejectReason::EmptyBook);
+        }
+
+        let mut remaining = order.qty;
+        let mut reports = vec![ExecutionReport::Accepted { order_id }];
+
+        while remaining != Qty(0) && self.best_opposite_price(order.side).is_some() {
+            let (fill_qty, resting_price) = self.execute_at_best(order.side, remaining);
+            remaining = Qty(remaining.0 - fill_qty.0);
+            Self::push_fill_report(&mut reports, order_id, fill_qty, remaining, resting_price);
+        }
+
+        if remaining == Qty(0) {
+            self.filled_order_ids.insert(order_id);
+        } else {
+            reports.push(ExecutionReport::Rejected {
+                order_id,
+                reason: RejectReason::MarketOrderWouldNotFill,
+            });
+        }
+
+        debug_assert!(self.book.check_matching_invariants().is_ok());
+        reports
     }
 
     fn submit_limit_order_inner(
@@ -79,57 +123,16 @@ impl MatchingEngine {
         let mut reports = vec![ExecutionReport::Accepted { order_id }];
 
         while remaining != Qty(0) {
-            let Some(opposite_price) = self.best_opposite_price(order.side) else {
+            if self.best_opposite_price(order.side).is_none() {
                 break;
-            };
+            }
             if !self.can_cross(order.side, price) {
                 break;
             }
 
-            let (resting_qty, resting_price) = {
-                let resting_order = self
-                    .book
-                    .best_opposite_order(order.side)
-                    .expect("crossing order must have opposing liquidity");
-                (resting_order.qty, resting_order.price)
-            };
-            debug_assert_eq!(resting_price, opposite_price);
-
-            let fill_qty = Qty(remaining.0.min(resting_qty.0));
-
-            if fill_qty == resting_qty {
-                let removed_order = self
-                    .book
-                    .remove_best_opposite(order.side)
-                    .expect("best opposing order must be removable");
-                debug_assert_eq!(removed_order.qty, fill_qty);
-                debug_assert_eq!(removed_order.price, resting_price);
-                self.filled_order_ids.insert(removed_order.order_id);
-            } else {
-                let updated_order = self
-                    .book
-                    .reduce_best_opposite_qty(order.side, fill_qty)
-                    .expect("larger resting order must be reducible");
-                debug_assert_eq!(updated_order.price, resting_price);
-                debug_assert_eq!(updated_order.qty.0, resting_qty.0 - fill_qty.0);
-            }
-
+            let (fill_qty, resting_price) = self.execute_at_best(order.side, remaining);
             remaining = Qty(remaining.0 - fill_qty.0);
-
-            if remaining == Qty(0) {
-                reports.push(ExecutionReport::Filled {
-                    order_id,
-                    qty: fill_qty,
-                    price: resting_price,
-                });
-            } else {
-                reports.push(ExecutionReport::PartiallyFilled {
-                    order_id,
-                    qty: fill_qty,
-                    remaining,
-                    price: resting_price,
-                });
-            }
+            Self::push_fill_report(&mut reports, order_id, fill_qty, remaining, resting_price);
         }
 
         if remaining != Qty(0) {
@@ -148,6 +151,59 @@ impl MatchingEngine {
         debug_assert!(self.book.check_matching_invariants().is_ok());
 
         reports
+    }
+
+    fn execute_at_best(&mut self, incoming_side: Side, incoming_qty: Qty) -> (Qty, PriceTicks) {
+        let (resting_qty, resting_price) = {
+            let resting_order = self
+                .book
+                .best_opposite_order(incoming_side)
+                .expect("execution requires opposing liquidity");
+            (resting_order.qty, resting_order.price)
+        };
+        let fill_qty = Qty(incoming_qty.0.min(resting_qty.0));
+
+        if fill_qty == resting_qty {
+            let removed_order = self
+                .book
+                .remove_best_opposite(incoming_side)
+                .expect("best opposing order must be removable");
+            debug_assert_eq!(removed_order.qty, fill_qty);
+            debug_assert_eq!(removed_order.price, resting_price);
+            self.filled_order_ids.insert(removed_order.order_id);
+        } else {
+            let updated_order = self
+                .book
+                .reduce_best_opposite_qty(incoming_side, fill_qty)
+                .expect("larger resting order must be reducible");
+            debug_assert_eq!(updated_order.price, resting_price);
+            debug_assert_eq!(updated_order.qty.0, resting_qty.0 - fill_qty.0);
+        }
+
+        (fill_qty, resting_price)
+    }
+
+    fn push_fill_report(
+        reports: &mut Vec<ExecutionReport>,
+        order_id: OrderId,
+        fill_qty: Qty,
+        remaining: Qty,
+        price: PriceTicks,
+    ) {
+        if remaining == Qty(0) {
+            reports.push(ExecutionReport::Filled {
+                order_id,
+                qty: fill_qty,
+                price,
+            });
+        } else {
+            reports.push(ExecutionReport::PartiallyFilled {
+                order_id,
+                qty: fill_qty,
+                remaining,
+                price,
+            });
+        }
     }
 
     fn process_cancel(&mut self, order_id: OrderId, symbol: &Symbol) -> Vec<ExecutionReport> {
@@ -444,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn process_event_rejects_unsupported_market_order() {
+    fn process_event_rejects_market_order_when_opposite_side_is_empty() {
         let mut engine = MatchingEngine::new(symbol());
         let mut market_order = order(10, Side::Buy, None, 5);
         market_order.order_type = OrderType::Market;
@@ -458,7 +514,7 @@ mod tests {
             reports,
             vec![ExecutionReport::Rejected {
                 order_id: 10,
-                reason: RejectReason::MarketOrderWouldNotFill,
+                reason: RejectReason::EmptyBook,
             }]
         );
     }
