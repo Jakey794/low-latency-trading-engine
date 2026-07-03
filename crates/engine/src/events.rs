@@ -37,11 +37,15 @@ pub struct Trade {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RejectReason {
     UnknownOrder,
+    AlreadyFilled,
+    AlreadyCancelled,
     EmptyBook,
+    InvalidQuantity,
+    InvalidPrice,
+    MarketOrderWouldNotFill,
+    InternalBookInvariantViolation,
+    // Kept for compatibility with the Week 3 `submit_limit_order` API.
     InvalidOrder,
-    MatchingNotImplemented,
-    RiskLimitBreached,
-    KillSwitchActive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +68,9 @@ pub enum ExecutionReport {
     Rested {
         order_id: OrderId,
         remaining: Qty,
+    },
+    Cancelled {
+        order_id: OrderId,
     },
     Rejected {
         order_id: OrderId,
@@ -185,5 +192,56 @@ mod tests {
             serde_json::from_str(&json).expect("execution report should deserialize");
 
         assert_eq!(decoded, report);
+    }
+
+    #[test]
+    fn constructs_each_week_four_execution_outcome() {
+        let reports = [
+            ExecutionReport::Accepted { order_id: 1 },
+            ExecutionReport::Filled {
+                order_id: 1,
+                qty: Qty(5),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::PartiallyFilled {
+                order_id: 1,
+                qty: Qty(3),
+                remaining: Qty(2),
+                price: PriceTicks(100),
+            },
+            ExecutionReport::Cancelled { order_id: 1 },
+            ExecutionReport::Rejected {
+                order_id: 1,
+                reason: RejectReason::UnknownOrder,
+            },
+        ];
+
+        for report in reports {
+            let json = serde_json::to_string(&report).expect("report should serialize");
+            let decoded: ExecutionReport =
+                serde_json::from_str(&json).expect("report should deserialize");
+            assert_eq!(decoded, report);
+        }
+    }
+
+    #[test]
+    fn reject_reasons_round_trip_through_json() {
+        let reasons = [
+            RejectReason::UnknownOrder,
+            RejectReason::AlreadyFilled,
+            RejectReason::AlreadyCancelled,
+            RejectReason::EmptyBook,
+            RejectReason::InvalidQuantity,
+            RejectReason::InvalidPrice,
+            RejectReason::MarketOrderWouldNotFill,
+            RejectReason::InternalBookInvariantViolation,
+        ];
+
+        for reason in reasons {
+            let json = serde_json::to_string(&reason).expect("reason should serialize");
+            let decoded: RejectReason =
+                serde_json::from_str(&json).expect("reason should deserialize");
+            assert_eq!(decoded, reason);
+        }
     }
 }

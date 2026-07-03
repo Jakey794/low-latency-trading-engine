@@ -54,6 +54,10 @@ pub enum BookError {
     NotLimitOrder(OrderId),
     #[error("limit order {0} is missing a price")]
     MissingPrice(OrderId),
+    #[error("invalid limit price: {0:?}")]
+    InvalidPrice(PriceTicks),
+    #[error("unknown order ID: {0}")]
+    UnknownOrder(OrderId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -173,6 +177,9 @@ impl OrderBook {
         }
 
         let price = order.price.ok_or(BookError::MissingPrice(order.order_id))?;
+        if price.0 <= 0 {
+            return Err(BookError::InvalidPrice(price));
+        }
         let levels = match order.side {
             Side::Buy => &self.bids,
             Side::Sell => &self.asks,
@@ -191,6 +198,10 @@ impl OrderBook {
         self.bids.keys().next_back().copied()
     }
 
+    pub(crate) fn symbol(&self) -> &Symbol {
+        &self.symbol
+    }
+
     pub fn best_ask(&self) -> Option<PriceTicks> {
         self.asks.keys().next().copied()
     }
@@ -203,6 +214,35 @@ impl OrderBook {
         };
 
         levels.get(&location.price)?.get_order(order_id)
+    }
+
+    pub(crate) fn cancel_order(&mut self, order_id: OrderId) -> Result<RestingOrder, BookError> {
+        let location = self
+            .order_index
+            .get(&order_id)
+            .copied()
+            .ok_or(BookError::UnknownOrder(order_id))?;
+        let levels = match location.side {
+            Side::Buy => &mut self.bids,
+            Side::Sell => &mut self.asks,
+        };
+        let (removed_order, level_is_empty) = {
+            let level = levels
+                .get_mut(&location.price)
+                .ok_or(BookError::UnknownOrder(order_id))?;
+            let removed_order = level
+                .remove(order_id)
+                .ok_or(BookError::UnknownOrder(order_id))?;
+            (removed_order, level.is_empty())
+        };
+
+        if level_is_empty {
+            levels.remove(&location.price);
+        }
+        self.order_index.remove(&order_id);
+
+        debug_assert!(self.check_invariants().is_ok());
+        Ok(removed_order)
     }
 
     pub(crate) fn best_opposite_order(&self, incoming_side: Side) -> Option<&RestingOrder> {

@@ -38,6 +38,14 @@ impl PriceLevel {
         self.orders.pop_front()
     }
 
+    pub(crate) fn remove(&mut self, order_id: OrderId) -> Option<RestingOrder> {
+        let position = self
+            .orders
+            .iter()
+            .position(|order| order.order_id == order_id)?;
+        self.orders.remove(position)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.orders.len()
     }
@@ -138,6 +146,20 @@ mod tests {
         assert_eq!(removed.map(|order| order.order_id), Some(10));
         assert_eq!(level.front().map(|order| order.order_id), Some(11));
         assert_eq!(level.len(), 1);
+    }
+
+    #[test]
+    fn removing_order_preserves_remaining_fifo_order() {
+        let mut level = PriceLevel::new(PRICE);
+        level.push_back(resting_order(10));
+        level.push_back(resting_order(11));
+        level.push_back(resting_order(12));
+
+        let removed = level.remove(11);
+
+        assert_eq!(removed.map(|order| order.order_id), Some(11));
+        let order_ids: Vec<_> = level.iter().map(|order| order.order_id).collect();
+        assert_eq!(order_ids, vec![10, 12]);
     }
 
     #[test]

@@ -1,31 +1,78 @@
+use std::collections::HashSet;
+
 use crate::{
-    book::OrderBook,
-    events::{ExecutionReport, RejectReason},
-    types::{Order, PriceTicks, Qty, Side, Symbol},
+    book::{BookError, OrderBook},
+    events::{ExecutionReport, InputEvent, RejectReason},
+    types::{Order, OrderId, OrderType, PriceTicks, Qty, Side, Symbol},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchingEngine {
     book: OrderBook,
+    filled_order_ids: HashSet<OrderId>,
+    cancelled_order_ids: HashSet<OrderId>,
 }
 
 impl MatchingEngine {
     pub fn new(symbol: Symbol) -> Self {
         Self {
             book: OrderBook::new(symbol),
+            filled_order_ids: HashSet::new(),
+            cancelled_order_ids: HashSet::new(),
         }
     }
 
-    pub fn submit_limit_order(&mut self, mut order: Order) -> Vec<ExecutionReport> {
+    pub fn process_event(&mut self, event: InputEvent) -> Vec<ExecutionReport> {
+        match event {
+            InputEvent::NewOrder(event) => self.process_new_order(event.order),
+            InputEvent::Cancel(event) => self.process_cancel(event.order_id, &event.symbol),
+        }
+    }
+
+    pub fn submit_limit_order(&mut self, order: Order) -> Vec<ExecutionReport> {
+        self.submit_limit_order_inner(order, true)
+    }
+
+    fn process_new_order(&mut self, order: Order) -> Vec<ExecutionReport> {
+        if order.qty == Qty(0) {
+            return Self::rejected(order.order_id, RejectReason::InvalidQuantity);
+        }
+        if order.order_type == OrderType::Market {
+            return Self::rejected(order.order_id, RejectReason::MarketOrderWouldNotFill);
+        }
+
+        self.submit_limit_order_inner(order, false)
+    }
+
+    fn submit_limit_order_inner(
+        &mut self,
+        mut order: Order,
+        preserve_legacy_market_rejection: bool,
+    ) -> Vec<ExecutionReport> {
         let order_id = order.order_id;
         let mut remaining = order.qty;
+
+        if self.book.check_matching_invariants().is_err() {
+            return Self::rejected(order_id, RejectReason::InternalBookInvariantViolation);
+        }
+        if self.filled_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyFilled);
+        }
+        if self.cancelled_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+        }
+
         let price = match self.book.validate_limit_order(&order) {
             Ok(price) => price,
-            Err(_) => {
-                return vec![ExecutionReport::Rejected {
-                    order_id,
-                    reason: RejectReason::InvalidOrder,
-                }];
+            Err(error) => {
+                let reason = if preserve_legacy_market_rejection
+                    && matches!(error, BookError::NotLimitOrder(_))
+                {
+                    RejectReason::InvalidOrder
+                } else {
+                    Self::reject_reason_for_book_error(error)
+                };
+                return Self::rejected(order_id, reason);
             }
         };
 
@@ -57,6 +104,7 @@ impl MatchingEngine {
                     .expect("best opposing order must be removable");
                 debug_assert_eq!(removed_order.qty, fill_qty);
                 debug_assert_eq!(removed_order.price, resting_price);
+                self.filled_order_ids.insert(removed_order.order_id);
             } else {
                 let updated_order = self
                     .book
@@ -93,11 +141,54 @@ impl MatchingEngine {
                 order_id,
                 remaining,
             });
+        } else {
+            self.filled_order_ids.insert(order_id);
         }
 
         debug_assert!(self.book.check_matching_invariants().is_ok());
 
         reports
+    }
+
+    fn process_cancel(&mut self, order_id: OrderId, symbol: &Symbol) -> Vec<ExecutionReport> {
+        if self.filled_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyFilled);
+        }
+        if self.cancelled_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+        }
+        if self.book.best_bid().is_none() && self.book.best_ask().is_none() {
+            return Self::rejected(order_id, RejectReason::EmptyBook);
+        }
+        if self.book.symbol() != symbol || self.book.get_order(order_id).is_none() {
+            return Self::rejected(order_id, RejectReason::UnknownOrder);
+        }
+
+        match self.book.cancel_order(order_id) {
+            Ok(_) => {
+                self.cancelled_order_ids.insert(order_id);
+                vec![ExecutionReport::Cancelled { order_id }]
+            }
+            Err(_) => Self::rejected(order_id, RejectReason::InternalBookInvariantViolation),
+        }
+    }
+
+    fn reject_reason_for_book_error(error: BookError) -> RejectReason {
+        match error {
+            BookError::InvalidQuantity(_) | BookError::QuantityOverflow(_) => {
+                RejectReason::InvalidQuantity
+            }
+            BookError::MissingPrice(_) | BookError::InvalidPrice(_) => RejectReason::InvalidPrice,
+            BookError::NotLimitOrder(_) => RejectReason::MarketOrderWouldNotFill,
+            BookError::UnknownOrder(_) => RejectReason::UnknownOrder,
+            BookError::DuplicateOrderId(_) | BookError::SymbolMismatch { .. } => {
+                RejectReason::InvalidOrder
+            }
+        }
+    }
+
+    fn rejected(order_id: OrderId, reason: RejectReason) -> Vec<ExecutionReport> {
+        vec![ExecutionReport::Rejected { order_id, reason }]
     }
 
     pub fn book(&self) -> &OrderBook {
@@ -126,6 +217,7 @@ impl MatchingEngine {
 
 #[cfg(test)]
 mod tests {
+    use crate::events::{CancelOrderEvent, NewOrderEvent};
     use crate::types::{OrderId, OrderType, Qty};
 
     use super::*;
@@ -292,5 +384,147 @@ mod tests {
         );
         assert_eq!(engine.book().snapshot(usize::MAX).bids, vec![]);
         assert_eq!(engine.book().snapshot(usize::MAX).asks, vec![]);
+    }
+
+    #[test]
+    fn process_event_accepts_new_limit_order() {
+        let mut engine = MatchingEngine::new(symbol());
+
+        let reports = engine.process_event(InputEvent::NewOrder(NewOrderEvent {
+            seq: 1,
+            order: order(10, Side::Buy, Some(100), 5),
+        }));
+
+        assert_eq!(
+            reports,
+            vec![
+                ExecutionReport::Accepted { order_id: 10 },
+                ExecutionReport::Rested {
+                    order_id: 10,
+                    remaining: Qty(5),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn process_event_rejects_invalid_quantity_and_price() {
+        let mut engine = MatchingEngine::new(symbol());
+
+        let zero_qty = engine.process_event(InputEvent::NewOrder(NewOrderEvent {
+            seq: 1,
+            order: order(10, Side::Buy, Some(100), 0),
+        }));
+        let missing_price = engine.process_event(InputEvent::NewOrder(NewOrderEvent {
+            seq: 2,
+            order: order(11, Side::Buy, None, 5),
+        }));
+        let non_positive_price = engine.process_event(InputEvent::NewOrder(NewOrderEvent {
+            seq: 3,
+            order: order(12, Side::Buy, Some(0), 5),
+        }));
+
+        assert_eq!(
+            zero_qty,
+            vec![ExecutionReport::Rejected {
+                order_id: 10,
+                reason: RejectReason::InvalidQuantity,
+            }]
+        );
+        for (reports, order_id) in [(missing_price, 11), (non_positive_price, 12)] {
+            assert_eq!(
+                reports,
+                vec![ExecutionReport::Rejected {
+                    order_id,
+                    reason: RejectReason::InvalidPrice,
+                }]
+            );
+        }
+        assert!(engine.book().snapshot(usize::MAX).bids.is_empty());
+    }
+
+    #[test]
+    fn process_event_rejects_unsupported_market_order() {
+        let mut engine = MatchingEngine::new(symbol());
+        let mut market_order = order(10, Side::Buy, None, 5);
+        market_order.order_type = OrderType::Market;
+
+        let reports = engine.process_event(InputEvent::NewOrder(NewOrderEvent {
+            seq: 1,
+            order: market_order,
+        }));
+
+        assert_eq!(
+            reports,
+            vec![ExecutionReport::Rejected {
+                order_id: 10,
+                reason: RejectReason::MarketOrderWouldNotFill,
+            }]
+        );
+    }
+
+    #[test]
+    fn cancel_event_removes_resting_order_and_rejects_repeat() {
+        let mut engine = MatchingEngine::new(symbol());
+        engine.submit_limit_order(order(10, Side::Buy, Some(100), 5));
+        let cancel = || {
+            InputEvent::Cancel(CancelOrderEvent {
+                seq: 2,
+                order_id: 10,
+                symbol: symbol(),
+                timestamp_ns: 2,
+            })
+        };
+
+        let cancelled = engine.process_event(cancel());
+        let repeated = engine.process_event(cancel());
+
+        assert_eq!(cancelled, vec![ExecutionReport::Cancelled { order_id: 10 }]);
+        assert_eq!(
+            repeated,
+            vec![ExecutionReport::Rejected {
+                order_id: 10,
+                reason: RejectReason::AlreadyCancelled,
+            }]
+        );
+        assert_eq!(engine.book().get_order(10), None);
+    }
+
+    #[test]
+    fn cancel_rejects_empty_book_unknown_order_and_filled_order() {
+        let cancel = |order_id| {
+            InputEvent::Cancel(CancelOrderEvent {
+                seq: 3,
+                order_id,
+                symbol: symbol(),
+                timestamp_ns: 3,
+            })
+        };
+        let mut empty_engine = MatchingEngine::new(symbol());
+        assert_eq!(
+            empty_engine.process_event(cancel(99)),
+            vec![ExecutionReport::Rejected {
+                order_id: 99,
+                reason: RejectReason::EmptyBook,
+            }]
+        );
+
+        let mut engine = MatchingEngine::new(symbol());
+        engine.submit_limit_order(order(1, Side::Sell, Some(100), 5));
+        assert_eq!(
+            engine.process_event(cancel(99)),
+            vec![ExecutionReport::Rejected {
+                order_id: 99,
+                reason: RejectReason::UnknownOrder,
+            }]
+        );
+        engine.submit_limit_order(order(2, Side::Buy, Some(100), 5));
+        assert_eq!(
+            engine.process_event(cancel(2)),
+            vec![ExecutionReport::Rejected {
+                order_id: 2,
+                reason: RejectReason::AlreadyFilled,
+            }]
+        );
     }
 }
