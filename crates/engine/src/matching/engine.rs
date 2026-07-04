@@ -213,9 +213,6 @@ impl MatchingEngine {
         if self.cancelled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyCancelled);
         }
-        if self.book.best_bid().is_none() && self.book.best_ask().is_none() {
-            return Self::rejected(order_id, RejectReason::EmptyBook);
-        }
         if self.book.symbol() != symbol || self.book.get_order(order_id).is_none() {
             return Self::rejected(order_id, RejectReason::UnknownOrder);
         }
@@ -547,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_rejects_empty_book_unknown_order_and_filled_order() {
+    fn cancel_rejects_unknown_and_filled_orders() {
         let cancel = |order_id| {
             InputEvent::Cancel(CancelOrderEvent {
                 seq: 3,
@@ -561,7 +558,7 @@ mod tests {
             empty_engine.process_event(cancel(99)),
             vec![ExecutionReport::Rejected {
                 order_id: 99,
-                reason: RejectReason::EmptyBook,
+                reason: RejectReason::UnknownOrder,
             }]
         );
 
