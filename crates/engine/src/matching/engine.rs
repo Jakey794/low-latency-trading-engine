@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    book::{BookError, OrderBook},
+    book::{assert_book_invariants, BookError, OrderBook},
     events::{ExecutionReport, InputEvent, RejectReason},
     types::{Order, OrderId, OrderType, PriceTicks, Qty, Side, Symbol},
 };
@@ -47,9 +47,7 @@ impl MatchingEngine {
     fn submit_market_order(&mut self, order: Order) -> Vec<ExecutionReport> {
         let order_id = order.order_id;
 
-        if self.book.check_matching_invariants().is_err() {
-            return Self::rejected(order_id, RejectReason::InternalBookInvariantViolation);
-        }
+        debug_assert!(assert_book_invariants(&self.book).is_ok());
         if self.filled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyFilled);
         }
@@ -84,7 +82,7 @@ impl MatchingEngine {
             });
         }
 
-        debug_assert!(self.book.check_matching_invariants().is_ok());
+        debug_assert!(assert_book_invariants(&self.book).is_ok());
         reports
     }
 
@@ -96,9 +94,7 @@ impl MatchingEngine {
         let order_id = order.order_id;
         let mut remaining = order.qty;
 
-        if self.book.check_matching_invariants().is_err() {
-            return Self::rejected(order_id, RejectReason::InternalBookInvariantViolation);
-        }
+        debug_assert!(assert_book_invariants(&self.book).is_ok());
         if self.filled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyFilled);
         }
@@ -148,7 +144,7 @@ impl MatchingEngine {
             self.filled_order_ids.insert(order_id);
         }
 
-        debug_assert!(self.book.check_matching_invariants().is_ok());
+        debug_assert!(assert_book_invariants(&self.book).is_ok());
 
         reports
     }

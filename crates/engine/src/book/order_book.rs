@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -61,7 +61,7 @@ pub enum BookError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum BookInvariantError {
+pub enum BookInvariantError {
     #[error("crossed book: best bid {best_bid:?} is not below best ask {best_ask:?}")]
     CrossedBook {
         best_bid: PriceTicks,
@@ -83,6 +83,14 @@ pub(crate) enum BookInvariantError {
     },
     #[error("resting order {0} has zero quantity")]
     ZeroQuantity(OrderId),
+    #[error("duplicate active order ID: {0}")]
+    DuplicateActiveOrderId(OrderId),
+    #[error("invalid {side:?} price ordering: {previous:?} appears before {current:?}")]
+    InvalidPriceOrdering {
+        side: Side,
+        previous: PriceTicks,
+        current: PriceTicks,
+    },
     #[error("aggregate quantity overflows for {side:?} price level {price:?}")]
     QuantityOverflow { side: Side, price: PriceTicks },
     #[error("resting order {0} has no order-index entry")]
@@ -363,6 +371,10 @@ impl OrderBook {
 
     pub(crate) fn check_invariants(&self) -> Result<(), BookInvariantError> {
         let mut resting_count = 0;
+        let mut active_order_ids = HashSet::new();
+
+        Self::check_price_ordering(Side::Buy, self.bids.keys().rev().copied())?;
+        Self::check_price_ordering(Side::Sell, self.asks.keys().copied())?;
 
         for (expected_side, levels) in [(Side::Buy, &self.bids), (Side::Sell, &self.asks)] {
             for (level_price, level) in levels {
@@ -376,6 +388,9 @@ impl OrderBook {
                 let mut level_qty = 0_u64;
                 for order in level.iter() {
                     resting_count += 1;
+                    if !active_order_ids.insert(order.order_id) {
+                        return Err(BookInvariantError::DuplicateActiveOrderId(order.order_id));
+                    }
 
                     if order.side != expected_side {
                         return Err(BookInvariantError::WrongOrderSide {
@@ -446,6 +461,30 @@ impl OrderBook {
         Ok(())
     }
 
+    fn check_price_ordering(
+        side: Side,
+        prices: impl Iterator<Item = PriceTicks>,
+    ) -> Result<(), BookInvariantError> {
+        let mut previous = None;
+        for current in prices {
+            if let Some(previous_price) = previous {
+                let invalid = match side {
+                    Side::Buy => previous_price <= current,
+                    Side::Sell => previous_price >= current,
+                };
+                if invalid {
+                    return Err(BookInvariantError::InvalidPriceOrdering {
+                        side,
+                        previous: previous_price,
+                        current,
+                    });
+                }
+            }
+            previous = Some(current);
+        }
+        Ok(())
+    }
+
     pub(crate) fn check_matching_invariants(&self) -> Result<(), BookInvariantError> {
         self.check_invariants()?;
 
@@ -457,6 +496,10 @@ impl OrderBook {
 
         Ok(())
     }
+}
+
+pub fn assert_book_invariants(book: &OrderBook) -> Result<(), BookInvariantError> {
+    book.check_matching_invariants()
 }
 
 #[cfg(test)]
@@ -1087,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn invariant_checker_detects_order_count_mismatch() {
+    fn invariant_checker_detects_duplicate_active_order_id() {
         let mut book = OrderBook::new(symbol());
         book.add_limit_order(limit_order(1, Side::Buy, 100, 10))
             .unwrap();
@@ -1098,10 +1141,7 @@ mod tests {
 
         assert_eq!(
             book.check_invariants(),
-            Err(BookInvariantError::OrderCountMismatch {
-                indexed: 1,
-                resting: 2,
-            })
+            Err(BookInvariantError::DuplicateActiveOrderId(1))
         );
     }
 
