@@ -207,23 +207,25 @@ impl MatchingEngine {
     }
 
     fn process_cancel(&mut self, order_id: OrderId, symbol: &Symbol) -> Vec<ExecutionReport> {
+        if self.book.symbol() != symbol {
+            return Self::rejected(order_id, RejectReason::UnknownOrder);
+        }
+        if self.book.get_order(order_id).is_some() {
+            return match self.book.cancel_order(order_id) {
+                Ok(_) => {
+                    self.cancelled_order_ids.insert(order_id);
+                    vec![ExecutionReport::Cancelled { order_id }]
+                }
+                Err(_) => Self::rejected(order_id, RejectReason::InternalBookInvariantViolation),
+            };
+        }
         if self.filled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyFilled);
         }
         if self.cancelled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyCancelled);
         }
-        if self.book.symbol() != symbol || self.book.get_order(order_id).is_none() {
-            return Self::rejected(order_id, RejectReason::UnknownOrder);
-        }
-
-        match self.book.cancel_order(order_id) {
-            Ok(_) => {
-                self.cancelled_order_ids.insert(order_id);
-                vec![ExecutionReport::Cancelled { order_id }]
-            }
-            Err(_) => Self::rejected(order_id, RejectReason::InternalBookInvariantViolation),
-        }
+        Self::rejected(order_id, RejectReason::UnknownOrder)
     }
 
     fn reject_reason_for_book_error(error: BookError) -> RejectReason {
