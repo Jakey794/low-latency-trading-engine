@@ -235,7 +235,7 @@ fn cancel_aggressive_market_order_rejected() {
         cancel(&mut partially_filled_engine, 11),
         vec![ExecutionReport::Rejected {
             order_id: 11,
-            reason: RejectReason::UnknownOrder,
+            reason: RejectReason::AlreadyExpired,
         }]
     );
 }

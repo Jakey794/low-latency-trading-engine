@@ -1031,9 +1031,9 @@ fn market_order_partial_fill_expires_remainder() {
                 remaining: Qty(2),
                 price: PriceTicks(100),
             },
-            ExecutionReport::Rejected {
+            ExecutionReport::Expired {
                 order_id: 10,
-                reason: RejectReason::MarketOrderWouldNotFill,
+                remaining: Qty(2),
             },
         ]
     );
@@ -1089,6 +1089,60 @@ fn trade_price_uses_resting_order_price() {
                 price: PriceTicks(107),
             },
         ]
+    );
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn expired_market_order_id_cannot_be_reused() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Sell, 100, 3));
+
+    let first_reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 5));
+    engine.submit_limit_order(limit_order(2, Side::Sell, 100, 5));
+    let repeated_market = submit_market_order(&mut engine, market_order(10, Side::Buy, 5));
+    let repeated_limit = engine.submit_limit_order(limit_order(10, Side::Buy, 100, 5));
+
+    assert_eq!(
+        first_reports.last(),
+        Some(&ExecutionReport::Expired {
+            order_id: 10,
+            remaining: Qty(2),
+        })
+    );
+    for reports in [repeated_market, repeated_limit] {
+        assert_eq!(
+            reports,
+            vec![ExecutionReport::Rejected {
+                order_id: 10,
+                reason: RejectReason::AlreadyExpired,
+            }]
+        );
+    }
+    assert_eq!(
+        engine.book().get_order(2).map(|order| order.qty),
+        Some(Qty(5))
+    );
+    assert_public_book_invariants(&engine);
+}
+
+#[test]
+fn market_order_with_only_same_side_liquidity_is_not_empty_book() {
+    let mut engine = MatchingEngine::new(symbol());
+    engine.submit_limit_order(limit_order(1, Side::Buy, 100, 5));
+
+    let reports = submit_market_order(&mut engine, market_order(10, Side::Buy, 5));
+
+    assert_eq!(
+        reports,
+        vec![ExecutionReport::Rejected {
+            order_id: 10,
+            reason: RejectReason::MarketOrderWouldNotFill,
+        }]
+    );
+    assert_eq!(
+        engine.book().get_order(1).map(|order| order.qty),
+        Some(Qty(5))
     );
     assert_public_book_invariants(&engine);
 }

@@ -39,6 +39,7 @@ pub enum RejectReason {
     UnknownOrder,
     AlreadyFilled,
     AlreadyCancelled,
+    AlreadyExpired,
     EmptyBook,
     InvalidQuantity,
     InvalidPrice,
@@ -56,11 +57,13 @@ pub enum ExecutionReport {
     },
     Filled {
         order_id: OrderId,
+        /// Quantity executed by this fill, not cumulative executed quantity.
         qty: Qty,
         price: PriceTicks,
     },
     PartiallyFilled {
         order_id: OrderId,
+        /// Quantity executed by this fill, not cumulative executed quantity.
         qty: Qty,
         remaining: Qty,
         price: PriceTicks,
@@ -71,6 +74,10 @@ pub enum ExecutionReport {
     },
     Cancelled {
         order_id: OrderId,
+    },
+    Expired {
+        order_id: OrderId,
+        remaining: Qty,
     },
     Rejected {
         order_id: OrderId,
@@ -210,6 +217,10 @@ mod tests {
                 price: PriceTicks(100),
             },
             ExecutionReport::Cancelled { order_id: 1 },
+            ExecutionReport::Expired {
+                order_id: 1,
+                remaining: Qty(2),
+            },
             ExecutionReport::Rejected {
                 order_id: 1,
                 reason: RejectReason::UnknownOrder,
@@ -230,6 +241,7 @@ mod tests {
             RejectReason::UnknownOrder,
             RejectReason::AlreadyFilled,
             RejectReason::AlreadyCancelled,
+            RejectReason::AlreadyExpired,
             RejectReason::EmptyBook,
             RejectReason::InvalidQuantity,
             RejectReason::InvalidPrice,

@@ -10,7 +10,7 @@ This is not a profitable trading bot and does not connect to real capital.
 
 ## Current Engine Status
 
-Week 3 complete:
+Week 4 complete:
 
 - Single-symbol limit order book
 - Bid/ask price levels
@@ -22,12 +22,14 @@ Week 3 complete:
 - Full, partial, multi-order, and multi-level fills
 - Resting-price execution reports
 - Residual quantity resting
+- Market-order matching and multi-level sweeps
+- Active-order cancellation
+- Typed execution and rejection reports
 - Structural and uncrossed-book invariant checks
 - Deterministic unit and scenario integration tests
 
 ## Planned features
 
-- Market and cancel orders
 - Deterministic replay
 - Strategy plugin interface
 - Position and P&L tracking
@@ -36,6 +38,24 @@ Week 3 complete:
 - Latency histogram
 - Throughput chart
 - Flamegraph profiling
+
+## Matching Engine Semantics
+
+### Limit orders
+
+A limit order matches immediately if it crosses the opposite side of the book. Matching uses price-time priority. Trade price is the resting order price. Any unfilled remainder rests on the book at its limit price.
+
+### Market orders
+
+A market order consumes available liquidity from the opposite side of the book, starting at the best price and sweeping price levels as needed. Market orders never rest. If insufficient liquidity exists, the engine fills the available quantity and expires the remainder through an execution report.
+
+### Cancels
+
+Cancel requests operate only on active resting orders. Cancelling an unknown, fully filled, already cancelled, expired, or never-rested aggressive order returns a typed rejection. Cancelling a partially filled resting order removes only its remaining quantity.
+
+### Invariants
+
+After processing orders, the book must not be crossed, must not contain zero-quantity orders, must not contain empty price levels, and the active order lookup must match the actual resting book contents.
 
 ## Build
 

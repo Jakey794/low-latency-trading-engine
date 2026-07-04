@@ -11,6 +11,7 @@ pub struct MatchingEngine {
     book: OrderBook,
     filled_order_ids: HashSet<OrderId>,
     cancelled_order_ids: HashSet<OrderId>,
+    expired_order_ids: HashSet<OrderId>,
 }
 
 impl MatchingEngine {
@@ -19,6 +20,7 @@ impl MatchingEngine {
             book: OrderBook::new(symbol),
             filled_order_ids: HashSet::new(),
             cancelled_order_ids: HashSet::new(),
+            expired_order_ids: HashSet::new(),
         }
     }
 
@@ -54,6 +56,9 @@ impl MatchingEngine {
         if self.cancelled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyCancelled);
         }
+        if self.expired_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyExpired);
+        }
         if self.book.get_order(order_id).is_some() || order.symbol != *self.book.symbol() {
             return Self::rejected(order_id, RejectReason::InvalidOrder);
         }
@@ -61,7 +66,12 @@ impl MatchingEngine {
             return Self::rejected(order_id, RejectReason::InvalidPrice);
         }
         if self.best_opposite_price(order.side).is_none() {
-            return Self::rejected(order_id, RejectReason::EmptyBook);
+            let reason = if self.book.best_bid().is_none() && self.book.best_ask().is_none() {
+                RejectReason::EmptyBook
+            } else {
+                RejectReason::MarketOrderWouldNotFill
+            };
+            return Self::rejected(order_id, reason);
         }
 
         let mut remaining = order.qty;
@@ -76,9 +86,10 @@ impl MatchingEngine {
         if remaining == Qty(0) {
             self.filled_order_ids.insert(order_id);
         } else {
-            reports.push(ExecutionReport::Rejected {
+            self.expired_order_ids.insert(order_id);
+            reports.push(ExecutionReport::Expired {
                 order_id,
-                reason: RejectReason::MarketOrderWouldNotFill,
+                remaining,
             });
         }
 
@@ -100,6 +111,9 @@ impl MatchingEngine {
         }
         if self.cancelled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+        }
+        if self.expired_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyExpired);
         }
 
         let price = match self.book.validate_limit_order(&order) {
@@ -220,6 +234,9 @@ impl MatchingEngine {
         }
         if self.cancelled_order_ids.contains(&order_id) {
             return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+        }
+        if self.expired_order_ids.contains(&order_id) {
+            return Self::rejected(order_id, RejectReason::AlreadyExpired);
         }
         Self::rejected(order_id, RejectReason::UnknownOrder)
     }
