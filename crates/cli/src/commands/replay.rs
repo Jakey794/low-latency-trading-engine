@@ -68,11 +68,8 @@ pub fn run(args: ReplayArgs) -> Result<()> {
     write_summary(&mut diagnostics, &result.summary)?;
     if args.book {
         writeln!(diagnostics, "book:")?;
-        serde_json::to_writer_pretty(
-            &mut diagnostics,
-            &driver.engine().book().snapshot(usize::MAX),
-        )
-        .context("failed to serialize final book snapshot")?;
+        serde_json::to_writer_pretty(&mut diagnostics, &result.final_book)
+            .context("failed to serialize final book snapshot")?;
         writeln!(diagnostics)?;
     }
 
@@ -106,5 +103,12 @@ fn write_summary<W: Write>(writer: &mut W, summary: &ReplaySummary) -> Result<()
     writeln!(writer, "trades: {}", summary.trades)?;
     writeln!(writer, "cancelled: {}", summary.cancelled)?;
     writeln!(writer, "expired: {}", summary.expired)?;
+    writeln!(
+        writer,
+        "final_resting_orders: {}",
+        summary.final_resting_orders
+    )?;
+    writeln!(writer, "final_bid_levels: {}", summary.final_bid_levels)?;
+    writeln!(writer, "final_ask_levels: {}", summary.final_ask_levels)?;
     writer.flush().context("failed to flush replay summary")
 }

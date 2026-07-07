@@ -7,6 +7,7 @@ use std::{
 use thiserror::Error;
 
 use crate::{
+    book::BookSnapshot,
     events::{CancelOrderEvent, ExecutionReport, InputEvent, NewOrderEvent},
     matching::MatchingEngine,
     types::SequenceNumber,
@@ -14,24 +15,14 @@ use crate::{
 
 use super::{
     parse_jsonl, ReplayEvent, ReplayEventKind, ReplayOutputEvent, ReplayOutputKind,
-    ReplayParseError,
+    ReplayParseError, ReplaySummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayResult {
     pub outputs: Vec<ReplayOutputEvent>,
     pub summary: ReplaySummary,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ReplaySummary {
-    pub input_events: u64,
-    pub output_events: u64,
-    pub accepted: u64,
-    pub rejected: u64,
-    pub trades: u64,
-    pub cancelled: u64,
-    pub expired: u64,
+    pub final_book: BookSnapshot,
 }
 
 #[derive(Debug, Error)]
@@ -91,23 +82,28 @@ impl ReplayDriver {
         self.validate_sequences(&events)?;
 
         let final_seq = events.last().map(|event| event.seq);
-        let mut result = ReplayResult {
-            outputs: Vec::new(),
-            summary: ReplaySummary {
-                input_events: events.len() as u64,
-                ..ReplaySummary::default()
-            },
+        let mut outputs = Vec::new();
+        let mut summary = ReplaySummary {
+            input_events: events.len() as u64,
+            ..ReplaySummary::default()
         };
 
         for event in events {
-            self.replay_event(event, &mut result);
+            self.replay_event(event, &mut outputs, &mut summary);
         }
 
         if let Some(final_seq) = final_seq {
             self.last_seq = Some(final_seq);
         }
 
-        Ok(result)
+        let final_book = self.engine.book().snapshot(usize::MAX);
+        summary.record_final_book(&final_book);
+
+        Ok(ReplayResult {
+            outputs,
+            summary,
+            final_book,
+        })
     }
 
     pub fn replay_file<P: AsRef<Path>>(&mut self, path: P) -> Result<ReplayResult, ReplayError> {
@@ -141,7 +137,12 @@ impl ReplayDriver {
         Ok(())
     }
 
-    fn replay_event(&mut self, event: ReplayEvent, result: &mut ReplayResult) {
+    fn replay_event(
+        &mut self,
+        event: ReplayEvent,
+        outputs: &mut Vec<ReplayOutputEvent>,
+        summary: &mut ReplaySummary,
+    ) {
         let ReplayEvent { seq, ts_ns, kind } = event;
         let input = match kind {
             ReplayEventKind::NewOrder { order } => {
@@ -190,7 +191,7 @@ impl ReplayDriver {
             };
 
             if let Some(kind) = kind {
-                Self::push_output(result, seq, ts_ns, kind);
+                Self::push_output(outputs, summary, seq, ts_ns, kind);
             }
         }
 
@@ -201,20 +202,21 @@ impl ReplayDriver {
     }
 
     fn push_output(
-        result: &mut ReplayResult,
+        outputs: &mut Vec<ReplayOutputEvent>,
+        summary: &mut ReplaySummary,
         seq: SequenceNumber,
         ts_ns: u64,
         kind: ReplayOutputKind,
     ) {
-        result.summary.output_events += 1;
+        summary.output_events += 1;
         match &kind {
-            ReplayOutputKind::Accepted { .. } => result.summary.accepted += 1,
-            ReplayOutputKind::Rejected { .. } => result.summary.rejected += 1,
-            ReplayOutputKind::Trade { .. } => result.summary.trades += 1,
-            ReplayOutputKind::Cancelled { .. } => result.summary.cancelled += 1,
-            ReplayOutputKind::Expired { .. } => result.summary.expired += 1,
+            ReplayOutputKind::Accepted { .. } => summary.accepted += 1,
+            ReplayOutputKind::Rejected { .. } => summary.rejected += 1,
+            ReplayOutputKind::Trade { .. } => summary.trades += 1,
+            ReplayOutputKind::Cancelled { .. } => summary.cancelled += 1,
+            ReplayOutputKind::Expired { .. } => summary.expired += 1,
         }
-        result.outputs.push(ReplayOutputEvent { seq, ts_ns, kind });
+        outputs.push(ReplayOutputEvent { seq, ts_ns, kind });
     }
 }
 
@@ -290,6 +292,9 @@ mod tests {
 
         assert!(result.outputs.is_empty());
         assert_eq!(result.summary, ReplaySummary::default());
+        assert_eq!(result.final_book.symbol, symbol());
+        assert!(result.final_book.bids.is_empty());
+        assert!(result.final_book.asks.is_empty());
         assert_eq!(driver.last_seq(), None);
     }
 
@@ -315,10 +320,49 @@ mod tests {
                 input_events: 1,
                 output_events: 1,
                 accepted: 1,
+                final_resting_orders: 1,
+                final_bid_levels: 1,
                 ..ReplaySummary::default()
             }
         );
+        assert_eq!(result.final_book.bids.len(), 1);
+        assert_eq!(result.final_book.bids[0].price, PriceTicks(100));
+        assert_eq!(result.final_book.bids[0].total_qty, Qty(5));
+        assert_eq!(result.final_book.bids[0].order_count, 1);
         assert!(driver.engine().book().get_order(10).is_some());
+    }
+
+    #[test]
+    fn non_crossing_orders_produce_best_to_worst_snapshot() {
+        let mut driver = driver();
+
+        let result = driver
+            .replay_events([
+                order_event(1, 10, Side::Buy, Some(98), 1),
+                order_event(2, 11, Side::Sell, Some(102), 2),
+                order_event(3, 12, Side::Buy, Some(99), 3),
+                order_event(4, 13, Side::Sell, Some(101), 4),
+            ])
+            .unwrap();
+
+        let bid_prices: Vec<_> = result
+            .final_book
+            .bids
+            .iter()
+            .map(|level| level.price)
+            .collect();
+        let ask_prices: Vec<_> = result
+            .final_book
+            .asks
+            .iter()
+            .map(|level| level.price)
+            .collect();
+
+        assert_eq!(bid_prices, vec![PriceTicks(99), PriceTicks(98)]);
+        assert_eq!(ask_prices, vec![PriceTicks(101), PriceTicks(102)]);
+        assert_eq!(result.summary.final_resting_orders, 4);
+        assert_eq!(result.summary.final_bid_levels, 2);
+        assert_eq!(result.summary.final_ask_levels, 2);
     }
 
     #[test]
@@ -342,7 +386,32 @@ mod tests {
             }
         );
         assert_eq!(result.summary.cancelled, 1);
+        assert_eq!(result.summary.final_resting_orders, 0);
+        assert_eq!(result.summary.final_bid_levels, 0);
+        assert!(result.final_book.bids.is_empty());
         assert!(driver.engine().book().get_order(10).is_none());
+    }
+
+    #[test]
+    fn partial_fill_snapshot_contains_remaining_resting_quantity() {
+        let mut driver = driver();
+
+        let result = driver
+            .replay_events([
+                order_event(1, 10, Side::Sell, Some(100), 10),
+                order_event(2, 20, Side::Buy, Some(100), 4),
+            ])
+            .unwrap();
+
+        assert!(result.final_book.bids.is_empty());
+        assert_eq!(result.final_book.asks.len(), 1);
+        assert_eq!(result.final_book.asks[0].price, PriceTicks(100));
+        assert_eq!(result.final_book.asks[0].total_qty, Qty(6));
+        assert_eq!(result.final_book.asks[0].order_count, 1);
+        assert_eq!(result.final_book.asks[0].order_ids, vec![10]);
+        assert_eq!(result.summary.final_resting_orders, 1);
+        assert_eq!(result.summary.final_bid_levels, 0);
+        assert_eq!(result.summary.final_ask_levels, 1);
     }
 
     #[test]
@@ -430,6 +499,9 @@ mod tests {
                 accepted: 2,
                 trades: 1,
                 expired: 1,
+                final_resting_orders: 0,
+                final_bid_levels: 0,
+                final_ask_levels: 0,
                 ..ReplaySummary::default()
             }
         );

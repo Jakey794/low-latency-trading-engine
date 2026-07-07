@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::types::{
     Order, OrderId, OrderType, PriceTicks, Qty, Side, StrategyId, Symbol, TimestampNanos,
 };
 
-use super::price_level::PriceLevel;
+use super::{
+    price_level::PriceLevel,
+    snapshot::{BookSnapshot, PriceLevelSnapshot},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestingOrder {
@@ -17,21 +19,6 @@ pub struct RestingOrder {
     pub qty: Qty,
     pub timestamp_ns: TimestampNanos,
     pub strategy_id: Option<StrategyId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BookSnapshot {
-    pub symbol: Symbol,
-    pub bids: Vec<LevelSnapshot>,
-    pub asks: Vec<LevelSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LevelSnapshot {
-    pub price: PriceTicks,
-    pub total_qty: Qty,
-    pub order_count: usize,
-    pub order_ids: Vec<OrderId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,7 +330,7 @@ impl OrderBook {
             .iter()
             .rev()
             .take(depth)
-            .map(|(price, level)| LevelSnapshot {
+            .map(|(price, level)| PriceLevelSnapshot {
                 price: *price,
                 total_qty: level.total_qty(),
                 order_count: level.len(),
@@ -354,7 +341,7 @@ impl OrderBook {
             .asks
             .iter()
             .take(depth)
-            .map(|(price, level)| LevelSnapshot {
+            .map(|(price, level)| PriceLevelSnapshot {
                 price: *price,
                 total_qty: level.total_qty(),
                 order_count: level.len(),
@@ -878,7 +865,7 @@ mod tests {
 
         assert_eq!(
             book.snapshot(1).bids,
-            vec![LevelSnapshot {
+            vec![PriceLevelSnapshot {
                 price: PriceTicks(100),
                 total_qty: Qty(35),
                 order_count: 2,
