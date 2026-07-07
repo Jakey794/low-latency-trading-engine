@@ -2,9 +2,16 @@ use std::collections::HashSet;
 
 use crate::{
     book::{assert_book_invariants, BookError, OrderBook},
-    events::{ExecutionReport, InputEvent, RejectReason},
-    types::{Order, OrderId, OrderType, PriceTicks, Qty, Side, Symbol},
+    events::{ExecutionReport, InputEvent, RejectReason, Trade},
+    types::{Order, OrderId, OrderType, PriceTicks, Qty, Side, Symbol, TimestampNanos},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchExecution {
+    maker_order_id: OrderId,
+    price: PriceTicks,
+    qty: Qty,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchingEngine {
@@ -25,45 +32,101 @@ impl MatchingEngine {
     }
 
     pub fn process_event(&mut self, event: InputEvent) -> Vec<ExecutionReport> {
+        let timestamp_ns = match &event {
+            InputEvent::NewOrder(event) => event.order.timestamp_ns,
+            InputEvent::Cancel(event) => event.timestamp_ns,
+        };
+        self.process_event_internal(event, timestamp_ns, false).0
+    }
+
+    pub(crate) fn process_event_with_trades(
+        &mut self,
+        event: InputEvent,
+        timestamp_ns: TimestampNanos,
+    ) -> (Vec<ExecutionReport>, Vec<Trade>) {
+        self.process_event_internal(event, timestamp_ns, true)
+    }
+
+    fn process_event_internal(
+        &mut self,
+        event: InputEvent,
+        timestamp_ns: TimestampNanos,
+        capture_trades: bool,
+    ) -> (Vec<ExecutionReport>, Vec<Trade>) {
         match event {
-            InputEvent::NewOrder(event) => self.process_new_order(event.order),
-            InputEvent::Cancel(event) => self.process_cancel(event.order_id, &event.symbol),
+            InputEvent::NewOrder(event) => {
+                self.process_new_order(event.order, timestamp_ns, capture_trades)
+            }
+            InputEvent::Cancel(event) => (
+                self.process_cancel(event.order_id, &event.symbol),
+                Vec::new(),
+            ),
         }
     }
 
     pub fn submit_limit_order(&mut self, order: Order) -> Vec<ExecutionReport> {
-        self.submit_limit_order_inner(order, true)
+        let timestamp_ns = order.timestamp_ns;
+        self.submit_limit_order_inner(order, true, timestamp_ns, false)
+            .0
     }
 
-    fn process_new_order(&mut self, order: Order) -> Vec<ExecutionReport> {
+    fn process_new_order(
+        &mut self,
+        order: Order,
+        timestamp_ns: TimestampNanos,
+        capture_trades: bool,
+    ) -> (Vec<ExecutionReport>, Vec<Trade>) {
         if order.qty == Qty(0) {
-            return Self::rejected(order.order_id, RejectReason::InvalidQuantity);
+            return (
+                Self::rejected(order.order_id, RejectReason::InvalidQuantity),
+                Vec::new(),
+            );
         }
         if order.order_type == OrderType::Market {
-            return self.submit_market_order(order);
+            return self.submit_market_order(order, timestamp_ns, capture_trades);
         }
 
-        self.submit_limit_order_inner(order, false)
+        self.submit_limit_order_inner(order, false, timestamp_ns, capture_trades)
     }
 
-    fn submit_market_order(&mut self, order: Order) -> Vec<ExecutionReport> {
+    fn submit_market_order(
+        &mut self,
+        order: Order,
+        timestamp_ns: TimestampNanos,
+        capture_trades: bool,
+    ) -> (Vec<ExecutionReport>, Vec<Trade>) {
         let order_id = order.order_id;
 
         debug_assert!(assert_book_invariants(&self.book).is_ok());
         if self.filled_order_ids.contains(&order_id) {
-            return Self::rejected(order_id, RejectReason::AlreadyFilled);
+            return (
+                Self::rejected(order_id, RejectReason::AlreadyFilled),
+                Vec::new(),
+            );
         }
         if self.cancelled_order_ids.contains(&order_id) {
-            return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+            return (
+                Self::rejected(order_id, RejectReason::AlreadyCancelled),
+                Vec::new(),
+            );
         }
         if self.expired_order_ids.contains(&order_id) {
-            return Self::rejected(order_id, RejectReason::AlreadyExpired);
+            return (
+                Self::rejected(order_id, RejectReason::AlreadyExpired),
+                Vec::new(),
+            );
         }
         if self.book.get_order(order_id).is_some() || order.symbol != *self.book.symbol() {
-            return Self::rejected(order_id, RejectReason::InvalidOrder);
+            return (
+                Self::rejected(order_id, RejectReason::InvalidOrder),
+                Vec::new(),
+            );
         }
         if order.price.is_some() {
-            return Self::rejected(order_id, RejectReason::InvalidPrice);
+            return (
+                Self::rejected(order_id, RejectReason::InvalidPrice),
+                Vec::new(),
+            );
         }
         if self.best_opposite_price(order.side).is_none() {
             let reason = if self.book.best_bid().is_none() && self.book.best_ask().is_none() {
@@ -71,16 +134,26 @@ impl MatchingEngine {
             } else {
                 RejectReason::MarketOrderWouldNotFill
             };
-            return Self::rejected(order_id, reason);
+            return (Self::rejected(order_id, reason), Vec::new());
         }
 
         let mut remaining = order.qty;
         let mut reports = vec![ExecutionReport::Accepted { order_id }];
+        let mut trades = Vec::new();
 
         while remaining != Qty(0) && self.best_opposite_price(order.side).is_some() {
-            let (fill_qty, resting_price) = self.execute_at_best(order.side, remaining);
-            remaining = Qty(remaining.0 - fill_qty.0);
-            Self::push_fill_report(&mut reports, order_id, fill_qty, remaining, resting_price);
+            let execution = self.execute_at_best(order.side, remaining);
+            remaining = Qty(remaining.0 - execution.qty.0);
+            Self::push_fill_report(
+                &mut reports,
+                order_id,
+                execution.qty,
+                remaining,
+                execution.price,
+            );
+            if capture_trades {
+                trades.push(Self::trade_for_execution(&order, execution, timestamp_ns));
+            }
         }
 
         if remaining == Qty(0) {
@@ -94,26 +167,37 @@ impl MatchingEngine {
         }
 
         debug_assert!(assert_book_invariants(&self.book).is_ok());
-        reports
+        (reports, trades)
     }
 
     fn submit_limit_order_inner(
         &mut self,
         mut order: Order,
         preserve_legacy_market_rejection: bool,
-    ) -> Vec<ExecutionReport> {
+        timestamp_ns: TimestampNanos,
+        capture_trades: bool,
+    ) -> (Vec<ExecutionReport>, Vec<Trade>) {
         let order_id = order.order_id;
         let mut remaining = order.qty;
 
         debug_assert!(assert_book_invariants(&self.book).is_ok());
         if self.filled_order_ids.contains(&order_id) {
-            return Self::rejected(order_id, RejectReason::AlreadyFilled);
+            return (
+                Self::rejected(order_id, RejectReason::AlreadyFilled),
+                Vec::new(),
+            );
         }
         if self.cancelled_order_ids.contains(&order_id) {
-            return Self::rejected(order_id, RejectReason::AlreadyCancelled);
+            return (
+                Self::rejected(order_id, RejectReason::AlreadyCancelled),
+                Vec::new(),
+            );
         }
         if self.expired_order_ids.contains(&order_id) {
-            return Self::rejected(order_id, RejectReason::AlreadyExpired);
+            return (
+                Self::rejected(order_id, RejectReason::AlreadyExpired),
+                Vec::new(),
+            );
         }
 
         let price = match self.book.validate_limit_order(&order) {
@@ -126,11 +210,12 @@ impl MatchingEngine {
                 } else {
                     Self::reject_reason_for_book_error(error)
                 };
-                return Self::rejected(order_id, reason);
+                return (Self::rejected(order_id, reason), Vec::new());
             }
         };
 
         let mut reports = vec![ExecutionReport::Accepted { order_id }];
+        let mut trades = Vec::new();
 
         while remaining != Qty(0) {
             if self.best_opposite_price(order.side).is_none() {
@@ -140,9 +225,18 @@ impl MatchingEngine {
                 break;
             }
 
-            let (fill_qty, resting_price) = self.execute_at_best(order.side, remaining);
-            remaining = Qty(remaining.0 - fill_qty.0);
-            Self::push_fill_report(&mut reports, order_id, fill_qty, remaining, resting_price);
+            let execution = self.execute_at_best(order.side, remaining);
+            remaining = Qty(remaining.0 - execution.qty.0);
+            Self::push_fill_report(
+                &mut reports,
+                order_id,
+                execution.qty,
+                remaining,
+                execution.price,
+            );
+            if capture_trades {
+                trades.push(Self::trade_for_execution(&order, execution, timestamp_ns));
+            }
         }
 
         if remaining != Qty(0) {
@@ -160,16 +254,20 @@ impl MatchingEngine {
 
         debug_assert!(assert_book_invariants(&self.book).is_ok());
 
-        reports
+        (reports, trades)
     }
 
-    fn execute_at_best(&mut self, incoming_side: Side, incoming_qty: Qty) -> (Qty, PriceTicks) {
-        let (resting_qty, resting_price) = {
+    fn execute_at_best(&mut self, incoming_side: Side, incoming_qty: Qty) -> MatchExecution {
+        let (maker_order_id, resting_qty, resting_price) = {
             let resting_order = self
                 .book
                 .best_opposite_order(incoming_side)
                 .expect("execution requires opposing liquidity");
-            (resting_order.qty, resting_order.price)
+            (
+                resting_order.order_id,
+                resting_order.qty,
+                resting_order.price,
+            )
         };
         let fill_qty = Qty(incoming_qty.0.min(resting_qty.0));
 
@@ -190,7 +288,27 @@ impl MatchingEngine {
             debug_assert_eq!(updated_order.qty.0, resting_qty.0 - fill_qty.0);
         }
 
-        (fill_qty, resting_price)
+        MatchExecution {
+            maker_order_id,
+            price: resting_price,
+            qty: fill_qty,
+        }
+    }
+
+    fn trade_for_execution(
+        incoming_order: &Order,
+        execution: MatchExecution,
+        timestamp_ns: TimestampNanos,
+    ) -> Trade {
+        Trade {
+            symbol: incoming_order.symbol.clone(),
+            taker_order_id: incoming_order.order_id,
+            maker_order_id: execution.maker_order_id,
+            price: execution.price,
+            qty: execution.qty,
+            aggressor_side: incoming_order.side,
+            timestamp_ns,
+        }
     }
 
     fn push_fill_report(

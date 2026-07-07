@@ -1,5 +1,9 @@
+mod commands;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+
+use commands::replay::{run, ReplayArgs};
 
 #[derive(Parser)]
 #[command(name = "engine-cli")]
@@ -11,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Replay { path: String },
+    Replay(ReplayArgs),
 }
 
 fn main() -> Result<()> {
@@ -20,10 +24,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Replay { path } => {
-            println!("Replay command received: {path}");
-        }
+        Command::Replay(args) => run(args),
     }
-
-    Ok(())
 }
