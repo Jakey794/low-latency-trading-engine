@@ -1,0 +1,4 @@
+{"seq":1,"ts_ns":100,"kind":"accepted","order_id":8401}
+{"seq":2,"ts_ns":200,"kind":"accepted","order_id":8402}
+{"seq":2,"ts_ns":200,"kind":"trade","trade":{"symbol":"AAPL","taker_order_id":8402,"maker_order_id":8401,"price":10000,"qty":4,"aggressor_side":"Buy","timestamp_ns":200}}
+{"seq":3,"ts_ns":300,"kind":"cancelled","order_id":8401}

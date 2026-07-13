@@ -1,0 +1,5 @@
+{"seq":1,"ts_ns":100,"kind":"accepted","order_id":8701}
+{"seq":2,"ts_ns":200,"kind":"accepted","order_id":8702}
+{"seq":2,"ts_ns":200,"kind":"trade","trade":{"symbol":"AAPL","taker_order_id":8702,"maker_order_id":8701,"price":10000,"qty":3,"aggressor_side":"Buy","timestamp_ns":200}}
+{"seq":3,"ts_ns":300,"kind":"accepted","order_id":8703}
+{"seq":3,"ts_ns":300,"kind":"trade","trade":{"symbol":"AAPL","taker_order_id":8703,"maker_order_id":8702,"price":10500,"qty":2,"aggressor_side":"Sell","timestamp_ns":300}}
