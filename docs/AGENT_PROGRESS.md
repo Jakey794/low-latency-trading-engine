@@ -2,7 +2,7 @@
 
 ## Status
 
-**IN PROGRESS** — Phase 1 (Portfolio and P&L)
+**IN PROGRESS** — Phase 2 (Risk engine and kill switch)
 
 ## Baseline (2026-08-05)
 
@@ -12,27 +12,22 @@
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | PASS |
 | `cargo test --workspace --all-targets --all-features` | PASS (179 tests) |
 
-Branch: `complete-elite-engine` @ `99912bd`
-Working tree: clean at baseline start.
+Branch: `complete-elite-engine`
 
-## Planned phases
+## Completed phases
 
-1. Portfolio and P&L
-2. Risk engine and kill switch
-3. Runtime and strategy plugin architecture
-4. Demonstration strategies
-5. Multi-symbol replay
-6. Benchmarking and latency metrics
-7. Elite systems features
-8. Dashboard, artifacts, documentation, and CI
+### Phase 1 — Portfolio and P&L
+
+- Implemented `Portfolio` with average-cost accounting, cash, realized/unrealized P&L, marks, equity
+- Checked `i128` arithmetic and explicit `PortfolioError`
+- Deterministic sorted `PortfolioSnapshot`
+- Unit tests cover long/short open/add/close/cover, cross-zero, overflow, multi-symbol
+- Integration tests wire fills from `MatchingEngine` reports
+- Gates: fmt, clippy, tests PASS (195 tests)
 
 ## Current phase
 
-Phase 1 — implementing portfolio module with average-cost accounting.
-
-## Verification results
-
-Baseline gates passed. Phase 1 implementation in progress.
+Phase 2 — Risk limits and kill switch.
 
 ## Blockers
 
@@ -40,6 +35,5 @@ None.
 
 ## Exact next action
 
-Implement `crates/engine/src/portfolio/` with position, cash, realized/unrealized
-P&L, mark prices, equity, deterministic snapshots, and focused tests; then run
-phase gates and commit.
+Implement `RiskLimits`, `RiskManager`, structured decisions, kill switch, and
+comprehensive boundary/atomicity tests; commit when gates pass.
