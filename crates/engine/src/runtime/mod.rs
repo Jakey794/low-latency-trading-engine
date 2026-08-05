@@ -335,6 +335,8 @@ impl Runtime {
         let symbol = order.symbol.clone();
         let order_id = order.order_id;
         let side = order.side;
+        let order_price = order.price;
+        let order_qty = order.qty;
         self.ensure_symbol(&symbol);
 
         match self.risk.check_new_order(&order, &self.portfolio) {
@@ -386,7 +388,32 @@ impl Runtime {
             .flatten()
             .collect();
 
+        let accepted = reports.iter().any(|r| {
+            matches!(
+                r,
+                ExecutionReport::Accepted {
+                    order_id: id
+                } if *id == order_id
+            )
+        });
+
         self.emit_reports(seq, ts_ns, reports, trades.clone(), outputs);
+
+        if mark_owned && accepted {
+            self.dispatch_strategies(
+                seq,
+                ts_ns,
+                &StrategyEvent::OrderAccepted {
+                    order_id,
+                    symbol: symbol.clone(),
+                    side,
+                    price: order_price,
+                    qty: order_qty,
+                },
+                Some(&symbol),
+                outputs,
+            )?;
+        }
 
         for trade in &trades {
             self.dispatch_strategies(

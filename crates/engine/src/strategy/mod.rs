@@ -1,7 +1,14 @@
-//! Strategy plugin interface.
+//! Strategy plugin interface and demonstration strategies.
 //!
 //! Strategies observe read-only market/portfolio context and return intents.
 //! They must never mutate the book, risk state, or portfolio directly.
+//! Demonstration strategies are examples only — not profitability claims.
+
+pub mod market_making;
+pub mod momentum;
+
+pub use market_making::{MarketMakingConfig, MarketMakingStrategy};
+pub use momentum::{MomentumConfig, MomentumStrategy};
 
 use crate::{
     book::BookSnapshot,
@@ -39,6 +46,14 @@ pub enum StrategyEvent {
         symbol: Symbol,
         side: Side,
         price: PriceTicks,
+        qty: Qty,
+    },
+    /// Runtime-assigned order id for a strategy placement that was accepted.
+    OrderAccepted {
+        order_id: OrderId,
+        symbol: Symbol,
+        side: Side,
+        price: Option<PriceTicks>,
         qty: Qty,
     },
     /// Explicit timer/tick from replay input (not wall-clock).
@@ -93,5 +108,20 @@ impl Strategy for NullStrategy {
 
     fn on_event(&mut self, _event: &StrategyEvent, _ctx: &StrategyContext) -> Vec<StrategyCommand> {
         Vec::new()
+    }
+}
+
+/// Built-in strategy factory for CLI and demos.
+pub fn create_builtin(name: &str, strategy_id: u64) -> Option<Box<dyn Strategy>> {
+    match name {
+        "market_making" | "mm" => Some(Box::new(MarketMakingStrategy::new(
+            strategy_id,
+            MarketMakingConfig::default(),
+        ))),
+        "momentum" => Some(Box::new(MomentumStrategy::new(
+            strategy_id,
+            MomentumConfig::default(),
+        ))),
+        _ => None,
     }
 }
