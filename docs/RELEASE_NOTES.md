@@ -20,6 +20,8 @@ low-latency deployment.
 - Criterion benches + `measure` harness with genuine hdrhistogram results
 - Naive Python LOB baseline and measured comparison charts
 - Property-based tests; order-pool and lock-free queue experiments
+- Paper WebSocket / mock market-data adapter (localhost only; no live trading)
+- CLI: `replay`, `simulate`, `strategy-replay`, `benchmark-report`, `websocket-demo`
 - CI, demo, and `scripts/verify_final.sh`
 
 ## Measured results (machine-specific)

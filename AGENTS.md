@@ -2,52 +2,68 @@
 
 ## Mission
 
-Finish this repository as a portfolio-quality Rust event-driven trading engine. Weeks 1–5 are complete. Preserve their behavior and extend the project through the final elite version.
+Maintain this repository as a portfolio-quality Rust event-driven trading engine.
+Weeks 1–5 (book, matching, deterministic replay) are complete and must not regress.
+The elite final scope (portfolio, risk, strategies, multi-symbol, metrics, elite
+experiments, paper WebSocket adapter, docs, CI) is implemented; extend carefully
+with tests and honest performance claims.
 
-## Required final scope
+## Architecture rules
 
-- Limit order book and matching engine
-- Limit, market, and cancel orders
-- Partial fills and price-time priority
-- Deterministic replay and golden tests
-- Position, cash, realized P&L, and unrealized P&L
-- Pre-trade risk limits and kill switch
-- Strategy plugin interface
-- Market-making and momentum demonstration strategies
-- Multi-symbol replay
-- Criterion benchmark suite
-- Latency histogram and throughput reporting
-- Naive Python baseline
-- Property-based tests
-- Profiling and flamegraph workflow
-- Architecture documentation
-- Benchmark report and charts
-- CI and reproducible demo commands
-- Carefully isolated elite experiments such as an arena/order pool and lock-free queue
+- Clear boundaries: ingress/replay → runtime coordinator → risk → matching →
+  portfolio → strategy callbacks → strategy intents (back through risk).
+- One matching engine / book per symbol; default coordinator is single-threaded
+  and deterministic.
+- Integer-tick prices only in matching and accounting paths.
+- Checked / wide integer arithmetic (`i128`) for notional, cash, and P&L.
+- No wall-clock time or randomness on deterministic execution paths.
+- Do not expose `HashMap` iteration order through public output (use sorted maps
+  or explicit ordering for snapshots and reports).
+- Avoid `unsafe` in the production engine. Elite experiments stay behind features
+  (`order_pool`, `lockfree_queue`) or isolated modules.
+- Strategies observe read-only context and emit bounded intents; they never mutate
+  book, portfolio, or risk state directly.
 
-## Engineering rules
+## Invariants
+
+- Book is never crossed after successful processing.
+- No resting order with zero quantity; no empty price levels.
+- Order-ID index stays consistent with resting orders.
+- Price-time (FIFO) priority at a price level.
+- Executed quantity never exceeds submitted quantity; fills conserve quantity.
+- Risk rejection does not mutate book or portfolio.
+- Cancels remain allowed while the kill switch is active.
+- Repeated replay of the same input produces identical ordered output.
+- Multi-symbol processing does not leak state between symbols.
+
+## Non-goals
+
+- Do not claim profitability, exchange-grade latency, or production readiness.
+- Do not connect to real capital or submit live exchange orders.
+- Do not add Kubernetes, databases, cloud deployment, or unrelated infrastructure.
+- Do not fabricate benchmark or profiler artifacts.
+- Do not weaken or delete existing tests to make new code pass.
+
+## Contributor rules
 
 - Correctness and determinism come before performance.
-- Never use floating-point prices. Preserve integer ticks.
-- Use checked arithmetic or wider integer types for notional and P&L.
-- Do not use system time or randomness in deterministic execution paths.
-- Do not expose HashMap iteration order through public output.
-- Avoid unsafe Rust in the production engine.
-- Keep experimental optimization code isolated behind a feature or module.
-- Do not claim profitability, exchange-grade latency, or production readiness.
-- Do not connect to real capital or submit live orders.
 - Every behavior change requires tests.
-- Do not delete or weaken existing tests.
-- Do not push, merge, force-reset, clean untracked files, use sudo, or modify secrets.
+- Prefer safe Rust; justify any new dependency.
+- Keep experimental optimization code isolated.
+- Do not push, merge, force-reset, clean untracked files, use sudo, or modify secrets
+  unless the user explicitly requests that operation.
 
 ## Required verification
 
-Before claiming completion, run:
+Before claiming completion of a change set, run:
 
+```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo test --workspace --release
 cargo bench --workspace --no-run
+```
 
-Do not claim success if any required command fails.
+Prefer `./scripts/verify_final.sh` for the full portfolio gate (demos, charts,
+artifact checks). Do not claim success if any required command fails.

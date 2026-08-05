@@ -37,6 +37,15 @@ jobs:
       - name: Compile order-pool bench
         run: cargo bench --workspace --no-run --features order_pool
 
+      - name: Compile lockfree-queue bench
+        run: cargo bench --workspace --no-run --features lockfree_queue
+
+      - name: Paper WebSocket offline demo
+        run: cargo run --release --bin engine-cli -- websocket-demo
+
+      - name: Benchmark report CLI
+        run: cargo run --release --bin engine-cli -- benchmark-report
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

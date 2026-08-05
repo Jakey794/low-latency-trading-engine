@@ -2,24 +2,41 @@
 //!
 //! Not integrated into the default matching path. Measures whether reusing
 //! order slots reduces allocations versus `Vec`/`Box` churn.
+//!
+//! Handles are generation-tagged so a stale handle cannot access a reused slot.
 
 use crate::types::{Order, OrderId, OrderType, PriceTicks, Qty, Side, Symbol, TimestampNanos};
 
 #[derive(Debug, Clone)]
 struct Slot {
     order: Order,
+    generation: u32,
     live: bool,
 }
 
-/// Dense free-list order pool with stable indices as handles.
+/// Dense free-list order pool with generation-safe handles.
 #[derive(Debug, Default)]
 pub struct OrderPool {
     slots: Vec<Slot>,
     free: Vec<usize>,
 }
 
+/// Stable index + generation. Stale handles fail closed after remove/reuse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PoolHandle(usize);
+pub struct PoolHandle {
+    index: usize,
+    generation: u32,
+}
+
+impl PoolHandle {
+    pub fn index(self) -> usize {
+        self.index
+    }
+
+    pub fn generation(self) -> u32 {
+        self.generation
+    }
+}
 
 impl OrderPool {
     pub fn new() -> Self {
@@ -35,36 +52,55 @@ impl OrderPool {
 
     pub fn insert(&mut self, order: Order) -> PoolHandle {
         if let Some(idx) = self.free.pop() {
-            self.slots[idx] = Slot { order, live: true };
-            PoolHandle(idx)
+            let slot = &mut self.slots[idx];
+            let generation = slot.generation;
+            slot.order = order;
+            slot.live = true;
+            PoolHandle {
+                index: idx,
+                generation,
+            }
         } else {
             let idx = self.slots.len();
-            self.slots.push(Slot { order, live: true });
-            PoolHandle(idx)
+            self.slots.push(Slot {
+                order,
+                generation: 0,
+                live: true,
+            });
+            PoolHandle {
+                index: idx,
+                generation: 0,
+            }
         }
     }
 
     pub fn get(&self, handle: PoolHandle) -> Option<&Order> {
-        self.slots
-            .get(handle.0)
-            .filter(|s| s.live)
-            .map(|s| &s.order)
+        let slot = self.slots.get(handle.index)?;
+        if slot.live && slot.generation == handle.generation {
+            Some(&slot.order)
+        } else {
+            None
+        }
     }
 
     pub fn get_mut(&mut self, handle: PoolHandle) -> Option<&mut Order> {
-        self.slots
-            .get_mut(handle.0)
-            .filter(|s| s.live)
-            .map(|s| &mut s.order)
+        let slot = self.slots.get_mut(handle.index)?;
+        if slot.live && slot.generation == handle.generation {
+            Some(&mut slot.order)
+        } else {
+            None
+        }
     }
 
     pub fn remove(&mut self, handle: PoolHandle) -> Option<Order> {
-        let slot = self.slots.get_mut(handle.0)?;
-        if !slot.live {
+        let slot = self.slots.get_mut(handle.index)?;
+        if !slot.live || slot.generation != handle.generation {
             return None;
         }
         slot.live = false;
-        self.free.push(handle.0);
+        // Bump generation so the old handle cannot observe a reused slot.
+        slot.generation = slot.generation.wrapping_add(1);
+        self.free.push(handle.index);
         Some(slot.order.clone())
     }
 
@@ -105,23 +141,36 @@ mod tests {
         pool.remove(h1).unwrap();
         assert_eq!(pool.live_count(), 1);
         let h3 = pool.insert(sample_order(3));
-        assert_eq!(h3, h1); // reused slot
+        assert_eq!(h3.index(), h1.index()); // reused slot index
+        assert_ne!(h3.generation(), h1.generation()); // new generation
         assert_eq!(pool.get(h3).unwrap().order_id, 3);
+        assert!(pool.get(h1).is_none()); // stale handle fails closed
         assert!(pool.get(h2).is_some());
         assert_eq!(pool.capacity_slots(), 2);
     }
 
     #[test]
+    fn stale_handle_cannot_remove_reused_slot() {
+        let mut pool = OrderPool::new();
+        let h1 = pool.insert(sample_order(1));
+        pool.remove(h1).unwrap();
+        let h2 = pool.insert(sample_order(2));
+        assert!(pool.remove(h1).is_none());
+        assert_eq!(pool.get(h2).unwrap().order_id, 2);
+    }
+
+    #[test]
     fn parity_with_vec_storage() {
         let mut pool = OrderPool::with_capacity(8);
+        let mut handles = Vec::new();
         let mut vec_store = Vec::new();
         for i in 0..20u64 {
             let o = sample_order(i);
             vec_store.push(o.clone());
-            let _ = pool.insert(o);
+            handles.push(pool.insert(o));
         }
         for i in (0..20).step_by(2) {
-            let _ = pool.remove(PoolHandle(i));
+            let _ = pool.remove(handles[i]);
         }
         assert_eq!(pool.live_count(), 10);
         assert_eq!(vec_store.len(), 20);

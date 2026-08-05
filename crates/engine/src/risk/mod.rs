@@ -22,10 +22,16 @@ pub struct RiskLimits {
     pub max_abs_position: Option<i64>,
     /// Maximum gross notional of a single order (`|price| * qty`).
     pub max_gross_notional: Option<Money>,
+    /// Maximum projected portfolio gross notional after the order
+    /// (`Σ |qty| × mark`, with the order's price used for its symbol).
+    pub max_total_portfolio_notional: Option<Money>,
     /// Per-symbol overrides for absolute position.
     pub per_symbol_max_abs_position: BTreeMap<String, i64>,
     /// Per-symbol overrides for single-order quantity.
     pub per_symbol_max_order_qty: BTreeMap<String, u64>,
+    /// Optional per-strategy order quantity caps (strategy_id → max qty).
+    #[serde(default)]
+    pub strategy_max_order_qty: BTreeMap<u64, u64>,
     /// Maximum total loss vs starting equity (`starting_equity - equity`).
     /// When breached post-trade, the kill switch activates automatically.
     pub max_total_loss: Option<Money>,
@@ -60,6 +66,14 @@ pub enum RiskRejectReason {
     },
     #[error("order gross notional {notional} exceeds max {limit}")]
     MaxGrossNotional { notional: Money, limit: Money },
+    #[error("projected portfolio gross notional {notional} exceeds max {limit}")]
+    MaxTotalPortfolioNotional { notional: Money, limit: Money },
+    #[error("strategy {strategy_id} order quantity {qty} exceeds strategy max {limit}")]
+    StrategyMaxOrderQty {
+        strategy_id: u64,
+        qty: u64,
+        limit: u64,
+    },
     #[error("order price required for notional check is missing or invalid")]
     InvalidPriceForNotional,
     #[error("risk arithmetic overflow")]
@@ -165,11 +179,29 @@ impl RiskManager {
             }
         }
 
+        if let Some(strategy_id) = order.strategy_id {
+            if let Some(&limit) = self.limits.strategy_max_order_qty.get(&strategy_id) {
+                if order.qty.0 > limit {
+                    return RiskDecision::Reject {
+                        reason: RiskRejectReason::StrategyMaxOrderQty {
+                            strategy_id,
+                            qty: order.qty.0,
+                            limit,
+                        },
+                    };
+                }
+            }
+        }
+
         if let Some(decision) = self.check_notional(order) {
             return decision;
         }
 
         if let Some(decision) = self.check_position(order, portfolio) {
+            return decision;
+        }
+
+        if let Some(decision) = self.check_portfolio_notional(order, portfolio) {
             return decision;
         }
 
@@ -294,6 +326,121 @@ impl RiskManager {
         }
 
         None
+    }
+
+    fn check_portfolio_notional(
+        &self,
+        order: &Order,
+        portfolio: &Portfolio,
+    ) -> Option<RiskDecision> {
+        let limit = self.limits.max_total_portfolio_notional?;
+
+        let order_price = match order.order_type {
+            OrderType::Limit => match order.price {
+                Some(p) if p.0 >= 0 => p,
+                _ => {
+                    return Some(RiskDecision::Reject {
+                        reason: RiskRejectReason::InvalidPriceForNotional,
+                    });
+                }
+            },
+            OrderType::Market => match order.price {
+                Some(p) if p.0 >= 0 => p,
+                Some(_) => {
+                    return Some(RiskDecision::Reject {
+                        reason: RiskRejectReason::InvalidPriceForNotional,
+                    });
+                }
+                // Without a price estimate, fall back to current mark if present.
+                None => portfolio.mark(&order.symbol)?,
+            },
+        };
+
+        let qty = match i64::try_from(order.qty.0) {
+            Ok(q) => q,
+            Err(_) => {
+                return Some(RiskDecision::Reject {
+                    reason: RiskRejectReason::Overflow,
+                });
+            }
+        };
+        let delta = match order.side {
+            Side::Buy => qty,
+            Side::Sell => -qty,
+        };
+        let current = portfolio.position_qty(&order.symbol);
+        let projected = match current.checked_add(delta) {
+            Some(p) => p,
+            None => {
+                return Some(RiskDecision::Reject {
+                    reason: RiskRejectReason::Overflow,
+                });
+            }
+        };
+
+        // Start from current gross notional, replace this symbol's contribution.
+        let mut total = match portfolio.gross_notional() {
+            Ok(v) => v,
+            Err(_) => {
+                return Some(RiskDecision::Reject {
+                    reason: RiskRejectReason::Overflow,
+                });
+            }
+        };
+
+        if let Some(mark) = portfolio.mark(&order.symbol) {
+            if current != 0 {
+                let old = match Money::from(current.unsigned_abs()).checked_mul(Money::from(mark.0))
+                {
+                    Some(v) => v,
+                    None => {
+                        return Some(RiskDecision::Reject {
+                            reason: RiskRejectReason::Overflow,
+                        });
+                    }
+                };
+                total = match total.checked_sub(old) {
+                    Some(v) => v,
+                    None => {
+                        return Some(RiskDecision::Reject {
+                            reason: RiskRejectReason::Overflow,
+                        });
+                    }
+                };
+            }
+        }
+
+        if projected != 0 {
+            let add = match Money::from(projected.unsigned_abs())
+                .checked_mul(Money::from(order_price.0))
+            {
+                Some(v) => v,
+                None => {
+                    return Some(RiskDecision::Reject {
+                        reason: RiskRejectReason::Overflow,
+                    });
+                }
+            };
+            total = match total.checked_add(add) {
+                Some(v) => v,
+                None => {
+                    return Some(RiskDecision::Reject {
+                        reason: RiskRejectReason::Overflow,
+                    });
+                }
+            };
+        }
+
+        if total > limit {
+            Some(RiskDecision::Reject {
+                reason: RiskRejectReason::MaxTotalPortfolioNotional {
+                    notional: total,
+                    limit,
+                },
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -480,5 +627,46 @@ mod tests {
         let before = portfolio.clone();
         let _ = rm.check_new_order(&order(1, Side::Buy, 100, 5), &portfolio);
         assert_eq!(portfolio, before);
+    }
+
+    #[test]
+    fn max_total_portfolio_notional_rejects() {
+        let limits = RiskLimits {
+            max_total_portfolio_notional: Some(1_000),
+            ..RiskLimits::default()
+        };
+        let rm = RiskManager::new(limits, 1_000_000);
+        let portfolio = Portfolio::new(1_000_000);
+        // 100 * 11 = 1100 > 1000
+        let reject = rm.check_new_order(&order(1, Side::Buy, 100, 11), &portfolio);
+        assert!(matches!(
+            reject,
+            RiskDecision::Reject {
+                reason: RiskRejectReason::MaxTotalPortfolioNotional { .. }
+            }
+        ));
+        assert!(rm
+            .check_new_order(&order(2, Side::Buy, 100, 10), &portfolio)
+            .is_allow());
+    }
+
+    #[test]
+    fn strategy_max_order_qty_rejects() {
+        let mut limits = RiskLimits::default();
+        limits.strategy_max_order_qty.insert(7, 2);
+        let rm = RiskManager::new(limits, 1_000_000);
+        let portfolio = Portfolio::new(1_000_000);
+        let mut o = order(1, Side::Buy, 100, 3);
+        o.strategy_id = Some(7);
+        assert!(matches!(
+            rm.check_new_order(&o, &portfolio),
+            RiskDecision::Reject {
+                reason: RiskRejectReason::StrategyMaxOrderQty {
+                    strategy_id: 7,
+                    qty: 3,
+                    limit: 2
+                }
+            }
+        ));
     }
 }

@@ -249,6 +249,49 @@ impl Portfolio {
     pub fn symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.positions.keys().map(|s| Symbol(s.clone()))
     }
+
+    /// Gross notional = Σ(|qty| × mark) across positions with known marks.
+    ///
+    /// Positions without marks are skipped (callers that need a hard check
+    /// should ensure marks exist, or use [`Self::gross_notional_strict`]).
+    pub fn gross_notional(&self) -> Result<Money, PortfolioError> {
+        let mut total: Money = 0;
+        for (sym, pos) in &self.positions {
+            if pos.qty == 0 {
+                continue;
+            }
+            let Some(mark) = self.marks.get(sym).copied() else {
+                continue;
+            };
+            let abs_qty = Money::from(pos.qty.unsigned_abs());
+            let n = abs_qty
+                .checked_mul(Money::from(mark.0))
+                .ok_or(PortfolioError::Overflow)?;
+            total = total.checked_add(n).ok_or(PortfolioError::Overflow)?;
+        }
+        Ok(total)
+    }
+
+    /// Gross notional requiring a mark for every non-zero position.
+    pub fn gross_notional_strict(&self) -> Result<Money, PortfolioError> {
+        let mut total: Money = 0;
+        for (sym, pos) in &self.positions {
+            if pos.qty == 0 {
+                continue;
+            }
+            let mark = self
+                .marks
+                .get(sym)
+                .copied()
+                .ok_or_else(|| PortfolioError::MissingMark(Symbol(sym.clone())))?;
+            let abs_qty = Money::from(pos.qty.unsigned_abs());
+            let n = abs_qty
+                .checked_mul(Money::from(mark.0))
+                .ok_or(PortfolioError::Overflow)?;
+            total = total.checked_add(n).ok_or(PortfolioError::Overflow)?;
+        }
+        Ok(total)
+    }
 }
 
 fn checked_notional(price: PriceTicks, qty: Qty) -> Result<Money, PortfolioError> {

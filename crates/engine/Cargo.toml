@@ -28,3 +28,8 @@ harness = false
 name = "order_pool_bench"
 harness = false
 required-features = ["order_pool"]
+
+[[bench]]
+name = "lockfree_queue_bench"
+harness = false
+required-features = ["lockfree_queue"]

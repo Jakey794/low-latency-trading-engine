@@ -27,6 +27,7 @@ This repository demonstrates how to build a correct, testable matching engine an
 | Python baseline | Done | Naive dict/list LOB for relative comparison |
 | Property-based tests | Done | proptest invariants on matching and book state |
 | Elite experiments | Done | `order_pool`, `lockfree_queue` features (isolated) |
+| Paper WebSocket adapter | Done | Mock + localhost loopback demo; no live trading |
 | CI & verify script | Done | fmt, clippy, tests, release tests, bench compile, smoke checks |
 
 ## Architecture
@@ -135,35 +136,53 @@ See [docs/replay.md](docs/replay.md) for input/output schemas and the golden sce
 
 ## Strategy demo
 
-Run built-in strategies through the runtime (`market_making` or `momentum`):
+Run built-in strategies through the runtime (`market-maker` / `market_making` or `momentum`):
 
 ```bash
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --summary-only
 
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/momentum_seed.jsonl \
   --strategy momentum \
-  --portfolio
+  --portfolio-summary
 ```
 
 Strategies observe read-only context and emit bounded intents; they never bypass risk. See [docs/strategies.md](docs/strategies.md).
 
 ## Risk demo
 
-Pre-trade rejection via CLI (`max_order_qty`):
+Pre-trade rejection via CLI (`max_order_qty`) or a risk JSON file:
 
 ```bash
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --max-order-qty 1 \
   --summary-only
+
+cargo run --release --bin engine-cli -- simulate \
+  data/scenarios/market_making_seed.jsonl \
+  --strategy market-maker \
+  --risk-config data/config/risk_demo.json \
+  --portfolio-summary
 ```
 
 Expect elevated `risk_rejected` counts; rejected orders do not mutate the book or portfolio. Kill-switch behavior is covered in integration tests — see [docs/risk.md](docs/risk.md).
+
+## Paper WebSocket demo
+
+Local paper market-data adapter (no credentials, no live orders):
+
+```bash
+# In-process mock (default)
+cargo run --release --bin engine-cli -- websocket-demo
+
+# Localhost WebSocket server + client
+cargo run --release --bin engine-cli -- websocket-demo --listen
+```
 
 ## Benchmarks and measured results
 
@@ -181,6 +200,12 @@ Generate charts from measured data (requires venv + matplotlib):
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r python/requirements.txt
 python scripts/generate_charts.py
+```
+
+Print the measured report from committed JSON:
+
+```bash
+cargo run --release --bin engine-cli -- benchmark-report
 ```
 
 Compile Criterion benches (CI-safe):
@@ -255,10 +280,11 @@ Requires measured `docs/benchmarks/latest.json` (rejects placeholders / missing 
 | [docs/portfolio.md](docs/portfolio.md) | Portfolio accounting model |
 | [docs/risk.md](docs/risk.md) | Risk limits and kill switch |
 | [docs/strategies.md](docs/strategies.md) | Strategy plugin interface and demos |
-| [docs/performance.md](docs/performance.md) | Benchmarks, metrics, profiling |
+| [docs/performance.md](docs/performance.md) | Benchmarks, metrics overview |
+| [docs/profiling.md](docs/profiling.md) | Flamegraph / `sample` profiling workflow |
 | [docs/demo.md](docs/demo.md) | Step-by-step demo walkthrough |
 | [docs/replay.md](docs/replay.md) | Replay formats and scenarios |
-| [docs/design_notes.md](docs/design_notes.md) | Design principles and tradeoffs |
+| [docs/design_notes.md](docs/design_notes.md) / [design-decisions.md](docs/design-decisions.md) | Design principles and tradeoffs |
 | [docs/benchmark_report.md](docs/benchmark_report.md) | Measured benchmark report |
 | [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) | Release summary |
 | [docs/artifacts/dashboard.html](docs/artifacts/dashboard.html) | Static measured report |
@@ -273,6 +299,7 @@ Requires measured `docs/benchmarks/latest.json` (rejects placeholders / missing 
 - **Batch replay:** full input validated in memory; no streaming checkpoint resume.
 - **Elite modules are experimental:** `order_pool` and `lockfree_queue` are isolated behind features.
 - **Order pool:** measured **worse** than Vec churn on this host; not default-integrated.
+- **Paper WebSocket:** localhost / mock only; never submits live exchange orders.
 - **Flamegraph:** may require full Xcode on macOS; `sample` profile is the committed fallback.
 
 ## Future work

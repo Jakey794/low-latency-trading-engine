@@ -3,6 +3,7 @@ pub mod elite;
 pub mod events;
 pub mod matching;
 pub mod metrics;
+pub mod paper;
 pub mod portfolio;
 pub mod replay;
 pub mod risk;

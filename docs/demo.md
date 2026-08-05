@@ -25,10 +25,10 @@ Full output events on stdout, summary on stderr:
 cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl
 ```
 
-Final book snapshot:
+Final book snapshot (events on stdout, book JSON on stderr):
 
 ```bash
-cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl --book --summary-only
+cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl --book
 ```
 
 ## 2. Determinism check
@@ -50,41 +50,74 @@ cargo run --release --bin engine-cli -- replay \
   --summary-only
 ```
 
-## 4. Strategy replay
+## 4. Strategy simulation
 
 Market making:
 
 ```bash
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --summary-only
 ```
 
 Momentum with portfolio JSON:
 
 ```bash
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/momentum_seed.jsonl \
   --strategy momentum \
-  --portfolio
+  --portfolio-summary
 ```
+
+(`strategy-replay` remains available as a compatibility command.)
 
 ## 5. Risk rejection demo
 
 Cap order size to force pre-trade rejections:
 
 ```bash
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --max-order-qty 1 \
+  --summary-only
+```
+
+Or load `data/config/risk_demo.json`:
+
+```bash
+cargo run --release --bin engine-cli -- simulate \
+  data/scenarios/market_making_seed.jsonl \
+  --strategy market-maker \
+  --risk-config data/config/risk_demo.json \
   --summary-only
 ```
 
 Compare `risk_rejected` count with an unrestricted run.
 
-## 6. Test suite highlights
+## 6. Paper WebSocket demo
+
+Offline mock (default, no network):
+
+```bash
+cargo run --release --bin engine-cli -- websocket-demo
+```
+
+Localhost WebSocket server + client (loopback only):
+
+```bash
+cargo run --release --bin engine-cli -- websocket-demo --listen
+```
+
+## 7. Benchmark report
+
+```bash
+cargo run --release --bin engine-cli -- benchmark-report
+# optional: --refresh --charts
+```
+
+## 8. Test suite highlights
 
 ```bash
 # All tests including elite features
@@ -93,17 +126,18 @@ cargo test --workspace --all-targets --all-features
 # Golden replay scenarios
 cargo test -p engine --test deterministic_replay
 
-# Risk, portfolio, strategies, multi-symbol
+# Risk, portfolio, strategies, multi-symbol, paper adapter
 cargo test -p engine --test risk_controls
 cargo test -p engine --test portfolio_accounting
 cargo test -p engine --test strategy_demos
 cargo test -p engine --test multi_symbol_replay
+cargo test -p engine --test paper_adapter
 
 # Property-based invariants
 cargo test -p engine --test property_invariants
 ```
 
-## 7. Benchmarks (smoke vs full)
+## 9. Benchmarks (smoke vs full)
 
 ```bash
 cargo bench --workspace --no-run
@@ -111,43 +145,43 @@ cargo bench -p engine --bench engine_hot_path
 BENCH_FULL=1 cargo bench -p engine --bench engine_hot_path
 ```
 
-## 8. Python baseline
+## 10. Python baseline
 
 ```bash
 python3 python/baseline_lob.py --events 10000
 ```
 
-## 9. Charts
+## 11. Charts
 
 ```bash
 python3 scripts/generate_charts.py
 open docs/artifacts/throughput_by_workload.png   # macOS; adjust for your OS
 ```
 
-## 10. Full automated demo
+## 12. Full automated demo
 
 ```bash
 chmod +x scripts/demo.sh
 ./scripts/demo.sh
 ```
 
-## 11. Full verification
+## 13. Full verification
 
 ```bash
 chmod +x scripts/verify_final.sh
 ./scripts/verify_final.sh
 ```
 
-## 12. Static dashboard
+## 14. Static dashboard
 
 Open [artifacts/dashboard.html](./artifacts/dashboard.html) for the measured report dashboard
 (charts, architecture SVG, and profiler links).
 
 ## What to tell reviewers
 
-- **Correctness:** golden-file replay, 200+ integration/unit/property tests.
+- **Correctness:** golden-file replay, integration/unit/property tests.
 - **Determinism:** integer ticks, no RNG or wall clock in engine paths.
-- **Scope:** simulated stack through risk and strategies; not live trading.
+- **Scope:** simulated stack through risk, strategies, and paper MD adapter; not live trading.
 - **Performance:** Criterion + Python baseline with machine-specific disclosure.
 - **Honesty:** no profitability or exchange-grade latency claims.
 

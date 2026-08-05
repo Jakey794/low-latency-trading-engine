@@ -50,6 +50,7 @@ step cargo test --workspace --features order_pool,lockfree_queue
 echo "--- Benchmark compile (no run) ---"
 step cargo bench --workspace --no-run
 step cargo bench --workspace --no-run --features order_pool
+step cargo bench --workspace --no-run --features lockfree_queue
 
 echo "--- Deterministic replay: basic_cross twice + byte compare ---"
 TMP1="$(mktemp)"
@@ -64,23 +65,29 @@ echo "Deterministic replay OK"
 echo
 
 echo "--- Risk rejection smoke ---"
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --max-order-qty 1 \
   --summary-only >/tmp/risk_smoke.txt 2>&1
 grep -E 'risk_rejected|accepted|output_events' /tmp/risk_smoke.txt
 echo
 
 echo "--- Strategy demos ---"
-step cargo run --release --bin engine-cli -- strategy-replay \
-  data/scenarios/market_making_seed.jsonl --strategy market_making --summary-only
-step cargo run --release --bin engine-cli -- strategy-replay \
+step cargo run --release --bin engine-cli -- simulate \
+  data/scenarios/market_making_seed.jsonl --strategy market-maker --summary-only
+step cargo run --release --bin engine-cli -- simulate \
   data/scenarios/momentum_seed.jsonl --strategy momentum --summary-only
 
 echo "--- Multi-symbol replay smoke ---"
 step cargo run --release --bin engine-cli -- replay \
   data/scenarios/multi_symbol_interleaved.jsonl --multi --summary-only
+
+echo "--- Paper WebSocket demo (offline) ---"
+step cargo run --release --bin engine-cli -- websocket-demo
+
+echo "--- Benchmark report CLI ---"
+step cargo run --release --bin engine-cli -- benchmark-report
 
 echo "--- Python baseline smoke ---"
 if [[ -x .venv/bin/python ]]; then
@@ -142,8 +149,10 @@ echo
 
 echo "--- Documentation presence ---"
 for f in README.md docs/architecture.md docs/architecture.mmd docs/portfolio.md docs/risk.md \
-  docs/strategies.md docs/replay.md docs/performance.md docs/benchmark_report.md docs/demo.md \
-  docs/design_notes.md docs/RELEASE_NOTES.md docs/AGENT_PROGRESS.md; do
+  docs/strategies.md docs/replay.md docs/performance.md docs/profiling.md docs/benchmark_report.md \
+  docs/benchmark-report.md docs/demo.md docs/design_notes.md docs/design-decisions.md \
+  docs/RELEASE_NOTES.md docs/AGENT_PROGRESS.md data/config/risk_demo.json \
+  data/scenarios/paper_ws_demo.jsonl; do
   [[ -f "$f" ]] || fail "missing $f"
 done
 echo "Docs OK"

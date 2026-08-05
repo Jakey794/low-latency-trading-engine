@@ -2,27 +2,26 @@
 
 ## Status
 
-**COMPLETE**
+**COMPLETE** (elite final scope, including paper WebSocket adapter)
 
 ## Final verification
 
-`scripts/verify_final.sh` — **PASSED**
+Run `./scripts/verify_final.sh` after changes. Do not claim success unless it passes.
 
-## What was finished in this pass
+## What was finished in the closing pass
 
-- Genuine `docs/benchmarks/latest.json` via release `measure` harness
-- Real charts (latency, throughput, rust vs python) from measured data
-- Rendered `docs/artifacts/architecture.svg`
-- macOS `sample` profiler artifact + `profile_summary.md` (flamegraph blocked by missing full Xcode/`xctrace`)
-- Python `.venv` workflow; naive baseline recorded in JSON
-- Order-pool before/after Criterion: **worse** than Vec churn; kept isolated
-- Hardened `verify_final.sh`, CI artifact checks, README measured results, `RELEASE_NOTES.md`
-- Additional proptest cases (portfolio conservation, symbol isolation, deterministic snapshots)
+- Paper / demo market-data adapter (`engine::paper`) with mock duplex + reconnect policy
+- Localhost WebSocket demo CLI (`websocket-demo`, loopback only)
+- `simulate`, `benchmark-report` CLI commands; risk JSON config (`data/config/risk_demo.json`)
+- Portfolio gross-notional + strategy-level risk limits
+- Generation-safe order-pool handles; lock-free queue producer/consumer test + Criterion bench
+- Docs: `profiling.md`, `design-decisions.md`, `benchmark-report.md`; README/demo/CI updates
 
 ## Remaining environment restriction (documented, not blocking)
 
-Flamegraph SVG requires full Xcode/`xctrace`. Genuine `/usr/bin/sample` output is committed instead. Retry command is in `docs/artifacts/profile_summary.md`.
+Flamegraph SVG requires full Xcode/`xctrace`. Genuine `/usr/bin/sample` output is committed instead.
+Retry command is in `docs/artifacts/profile_summary.md` and `docs/profiling.md`.
 
 ## Exact next action
 
-None for completion gates.
+None for completion gates — run verify script and open a PR when requested.

@@ -1,0 +1,16 @@
+{
+  "max_order_qty": 100,
+  "max_abs_position": 500,
+  "max_gross_notional": 1000000,
+  "max_total_portfolio_notional": 5000000,
+  "max_total_loss": 250000,
+  "per_symbol_max_abs_position": {
+    "AAPL": 200
+  },
+  "per_symbol_max_order_qty": {
+    "AAPL": 50
+  },
+  "strategy_max_order_qty": {
+    "1": 25
+  }
+}

@@ -1,0 +1,5 @@
+{"type":"quote","seq":1,"ts_ns":1000,"symbol":"AAPL","bid_px":100,"bid_qty":20,"ask_px":101,"ask_qty":20}
+{"type":"heartbeat","seq":3,"ts_ns":1100}
+{"type":"paper_order","seq":4,"ts_ns":1200,"order_id":9001,"symbol":"AAPL","side":"Buy","order_type":"Limit","price":101,"qty":5}
+{"type":"paper_order","seq":5,"ts_ns":1300,"order_id":9002,"symbol":"AAPL","side":"Sell","order_type":"Limit","price":100,"qty":3}
+{"type":"timer","seq":6,"ts_ns":1400,"symbol":"AAPL"}

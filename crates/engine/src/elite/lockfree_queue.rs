@@ -89,4 +89,32 @@ mod tests {
         assert!(q.pop().is_some());
         q.push(sample_event(4)).unwrap();
     }
+
+    #[test]
+    fn producer_consumer_two_threads_preserves_count() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let q = Arc::new(EventQueue::with_capacity(1024));
+        let q_prod = Arc::clone(&q);
+        const N: u64 = 500;
+        let producer = thread::spawn(move || {
+            for i in 0..N {
+                while q_prod.push(sample_event(i)).is_err() {
+                    std::hint::spin_loop();
+                }
+            }
+        });
+        let mut got = Vec::with_capacity(N as usize);
+        while got.len() < N as usize {
+            if let Some(InputEvent::NewOrder(e)) = q.pop() {
+                got.push(e.seq);
+            } else {
+                std::hint::spin_loop();
+            }
+        }
+        producer.join().unwrap();
+        got.sort_unstable();
+        assert_eq!(got, (0..N).collect::<Vec<_>>());
+    }
 }

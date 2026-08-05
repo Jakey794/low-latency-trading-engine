@@ -5,7 +5,7 @@ This document describes the full engine stack: matching, replay, runtime, portfo
 ## High-level data flow
 
 ```text
-JSONL / CLI / Strategy intents
+JSONL / CLI / Paper MD / Strategy intents
         ↓
    Runtime (router)  — or ReplayDriver (Week 5 single-symbol path)
         ↓
@@ -26,8 +26,8 @@ See [architecture.mmd](./architecture.mmd) for the Mermaid source used in the RE
 
 | Crate | Role |
 | --- | --- |
-| `engine` | Order book, matching, replay, runtime, portfolio, risk, strategies, metrics, elite |
-| `engine-cli` | `replay` and `strategy-replay` commands |
+| `engine` | Order book, matching, replay, runtime, portfolio, risk, strategies, metrics, paper adapter, elite |
+| `engine-cli` | `replay`, `simulate`, `strategy-replay`, `benchmark-report`, `websocket-demo` |
 
 ## Order book
 
@@ -150,14 +150,22 @@ Criterion bench `engine_hot_path` covers:
 - Strategy runtime seed
 - Multi-symbol interleaved routing
 
+## Paper market-data adapter
+
+`engine::paper` converts external-style JSON messages (quotes, paper orders,
+cancels, timers, heartbeats) into `RuntimeEvent`s. An in-memory mock duplex
+supports deterministic tests without network I/O. The CLI `websocket-demo`
+command can also run a localhost-only tungstenite server/client. There are no
+credentials and no live exchange submissions.
+
 ## Elite experiments
 
 Behind optional Cargo features in `engine::elite`:
 
 | Feature | Module | Notes |
 | --- | --- | --- |
-| `order_pool` | `order_pool` | Arena-style order reuse prototype |
-| `lockfree_queue` | `lockfree_queue` | Lock-free queue experiment |
+| `order_pool` | `order_pool` | Generation-safe order reuse prototype |
+| `lockfree_queue` | `lockfree_queue` | Bounded crossbeam ArrayQueue experiment |
 
 These are isolated measurement prototypes. The default deterministic path does not depend on them and avoids `unsafe` in production code.
 

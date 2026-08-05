@@ -14,12 +14,15 @@ For each new order, risk evaluates (when limits are set):
 | --- | --- |
 | Kill switch active | `KillSwitchActive` |
 | Order quantity | `MaxOrderQty`, `PerSymbolMaxOrderQty` |
+| Strategy-level order quantity | `StrategyMaxOrderQty` |
 | Projected absolute position | `MaxAbsPosition`, `PerSymbolMaxAbsPosition` |
 | Gross notional (`|price| * qty`) | `MaxGrossNotional` |
+| Projected portfolio gross notional | `MaxTotalPortfolioNotional` |
 | Missing/invalid price for notional | `InvalidPriceForNotional` |
 | Arithmetic overflow | `Overflow` |
 
-`None` on a limit field disables that check.
+`None` on a limit field disables that check. Permissive defaults (all `None`)
+preserve existing Week 5 replay behavior.
 
 ### Post-trade monitoring
 
@@ -44,19 +47,39 @@ Strategy-generated orders follow the same path; strategies cannot bypass risk.
 
 ## CLI demonstration
 
-Reject large orders via `--max-order-qty`:
+Reject large orders via `--max-order-qty`, or load a JSON risk file:
 
 ```bash
-cargo run --release --bin engine-cli -- strategy-replay \
+cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --max-order-qty 1 \
   --summary-only
+
+cargo run --release --bin engine-cli -- simulate \
+  data/scenarios/market_making_seed.jsonl \
+  --strategy market-maker \
+  --risk-config data/config/risk_demo.json \
+  --portfolio-summary
 ```
 
 Compare `risk_rejected` vs a run without the limit.
 
 ## Configuration example
+
+JSON (`data/config/risk_demo.json`):
+
+```json
+{
+  "max_order_qty": 100,
+  "max_abs_position": 500,
+  "max_gross_notional": 1000000,
+  "max_total_portfolio_notional": 5000000,
+  "max_total_loss": 250000
+}
+```
+
+Rust:
 
 ```rust
 use engine::risk::RiskLimits;
@@ -65,12 +88,13 @@ let limits = RiskLimits {
     max_order_qty: Some(100),
     max_abs_position: Some(500),
     max_gross_notional: Some(1_000_000),
+    max_total_portfolio_notional: Some(5_000_000),
     max_total_loss: Some(50_000),
     ..RiskLimits::default()
 };
 ```
 
-Per-symbol overrides use `BTreeMap<String, _>` fields for deterministic iteration in tests.
+Per-symbol and per-strategy overrides use `BTreeMap` fields for deterministic iteration.
 
 ## Testing
 

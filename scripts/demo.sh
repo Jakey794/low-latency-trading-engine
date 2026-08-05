@@ -36,31 +36,44 @@ echo "Deterministic replay: identical stdout bytes"
 echo
 
 echo "--- 4. Risk rejection (max order qty = 1) ---"
-run cargo run --release --bin engine-cli -- strategy-replay \
+run cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --max-order-qty 1 \
   --summary-only
 
-echo "--- 5. Kill-switch behavior (unit-tested; CLI shows risk_rejected under tight limits) ---"
+echo "--- 5. Risk config file ---"
+run cargo run --release --bin engine-cli -- simulate \
+  data/scenarios/market_making_seed.jsonl \
+  --strategy market-maker \
+  --risk-config data/config/risk_demo.json \
+  --summary-only
+
+echo "--- 6. Kill-switch behavior (unit-tested; CLI shows risk_rejected under tight limits) ---"
 echo "See cargo test -p engine --test risk_controls"
 echo
 
-echo "--- 6. Market-making strategy ---"
-run cargo run --release --bin engine-cli -- strategy-replay \
+echo "--- 7. Market-making strategy ---"
+run cargo run --release --bin engine-cli -- simulate \
   data/scenarios/market_making_seed.jsonl \
-  --strategy market_making \
+  --strategy market-maker \
   --summary-only
 
-echo "--- 7. Momentum strategy ---"
-run cargo run --release --bin engine-cli -- strategy-replay \
+echo "--- 8. Momentum strategy ---"
+run cargo run --release --bin engine-cli -- simulate \
   data/scenarios/momentum_seed.jsonl \
   --strategy momentum \
   --summary-only
 
-echo "--- 8. Multi-symbol replay ---"
+echo "--- 9. Multi-symbol replay ---"
 run cargo run --release --bin engine-cli -- replay \
   data/scenarios/multi_symbol_interleaved.jsonl --multi --summary-only
+
+echo "--- 10. Paper WebSocket demo (offline mock) ---"
+run cargo run --release --bin engine-cli -- websocket-demo
+
+echo "--- 11. Benchmark report ---"
+run cargo run --release --bin engine-cli -- benchmark-report
 
 echo "--- Benchmark / report locations ---"
 echo "  docs/benchmarks/latest.json"
@@ -70,6 +83,7 @@ echo "  docs/artifacts/latency_histogram.png"
 echo "  docs/artifacts/throughput_chart.png"
 echo "  docs/artifacts/rust_vs_python.png"
 echo "  docs/artifacts/profile_summary.md"
+echo "  docs/profiling.md"
 echo
 
 echo "Demo complete. See docs/demo.md for details."
