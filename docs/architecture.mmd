@@ -1,0 +1,70 @@
+flowchart TB
+    subgraph inputs ["Inputs"]
+        JSONL["JSONL replay files"]
+        CLI["engine-cli"]
+    end
+
+    subgraph runtime ["Runtime orchestration"]
+        Router["Symbol router"]
+        SeqVal["Sequence validation"]
+        Risk["RiskManager"]
+        Portfolio["Portfolio"]
+        StrategyReg["Strategy registry"]
+    end
+
+    subgraph per_symbol ["Per-symbol matching"]
+        ME["MatchingEngine"]
+        OB["OrderBook"]
+        PL["Price levels FIFO"]
+    end
+
+    subgraph outputs ["Outputs"]
+        ReplayOut["ReplayOutputEvent / RuntimeOutput"]
+        Summary["ReplaySummary / CLI summary"]
+        BookSnap["BookSnapshot"]
+        PortSnap["PortfolioSnapshot"]
+    end
+
+    subgraph bench ["Benchmarks and metrics (non-deterministic)"]
+        Criterion["Criterion benches"]
+        Metrics["LatencyCollector / throughput"]
+        PythonBL["Python baseline"]
+    end
+
+    subgraph elite ["Elite experiments (feature-gated)"]
+        OrderPool["order_pool"]
+        LockFree["lockfree_queue"]
+    end
+
+    JSONL --> CLI
+    CLI -->|"replay (single-symbol)"| ReplayDriver["ReplayDriver"]
+    CLI -->|"replay --multi / strategy-replay"| Router
+
+    ReplayDriver --> ME
+    Router --> SeqVal
+    SeqVal --> Risk
+
+    Risk -->|"Allow"| ME
+    Risk -->|"Reject"| ReplayOut
+
+    ME --> OB
+    OB --> PL
+
+    ME -->|"trades"| Portfolio
+    Portfolio -->|"loss breach"| Risk
+
+    ME -->|"BookUpdate / Trade / Fill"| StrategyReg
+    StrategyReg -->|"bounded StrategyCommand"| Risk
+
+    ME --> ReplayOut
+    OB --> BookSnap
+    Portfolio --> PortSnap
+    ReplayDriver --> Summary
+
+    Criterion --> ME
+    Criterion --> Router
+    Metrics --> Criterion
+    PythonBL -.->|"relative comparison"| Metrics
+
+    OrderPool -.->|"isolated prototype"| ME
+    LockFree -.->|"isolated prototype"| elite

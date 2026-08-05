@@ -1,6 +1,6 @@
 # Completion Plan
 
-Finish the Week-5 baseline as a recruiter-ready event-driven trading engine.
+Finish the event-driven trading engine as a recruiter-ready portfolio project.
 Preserve all existing matching, cancel, invariant, and golden-replay behavior.
 
 ## Constraints
@@ -9,20 +9,21 @@ Preserve all existing matching, cancel, invariant, and golden-replay behavior.
 - Deterministic core: no wall clock, randomness, or HashMap output order
 - No unsafe in production path; elite experiments behind features
 - Strategies never bypass risk; cancels remain available after kill switch
-- Commit after each phase when gates pass; never push/merge
+- Commit after each phase when gates pass; never push/merge unless requested
+- No profitability or exchange-grade latency claims
 
 ## Phases
 
-| Phase | Scope | Commit when |
+| Phase | Scope | Status |
 | --- | --- | --- |
-| 1 | Portfolio + P&L (avg-cost, realized/unrealized, equity, snapshots) | Unit + integration tests pass |
-| 2 | Risk limits + kill switch (pre-trade, post-trade loss trip) | Boundary/atomicity tests pass |
-| 3 | Runtime orchestration + strategy trait | Deterministic strategy integration tests pass |
-| 4 | Market-making + momentum demos + CLI + scenarios | Golden/strategy tests pass |
-| 5 | Multi-symbol router/replay | Isolation + interleaved scenarios pass |
-| 6 | Criterion benches, latency metrics, Python baseline, charts | Benches compile; gates pass |
-| 7 | proptest, order-pool feature, lock-free queue experiment | Feature tests pass |
-| 8 | Docs, dashboard, CI, demo/verify scripts, flamegraph attempt | `scripts/verify_final.sh` passes |
+| 1 | Portfolio + P&L (avg-cost, realized/unrealized, equity, snapshots) | Done |
+| 2 | Risk limits + kill switch (pre-trade, post-trade loss trip) | Done |
+| 3 | Runtime orchestration + strategy trait | Done |
+| 4 | Market-making + momentum demos + CLI + scenarios | Done |
+| 5 | Multi-symbol router/replay | Done |
+| 6 | Criterion benches, latency metrics, Python baseline, charts | Done |
+| 7 | proptest, order-pool feature, lock-free queue experiment | Done |
+| 8 | Docs, dashboard, CI, demo/verify scripts | **In progress** |
 
 ## Architecture sketch
 
@@ -40,6 +41,8 @@ JSONL / CLI / Strategy intents
   Strategy callbacks (read-only context → bounded intents)
 ```
 
+Full documentation: [docs/architecture.md](./architecture.md)
+
 ## Verification gates (every phase)
 
 ```bash
@@ -48,5 +51,39 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 ```
 
-Final phase additionally runs release tests, `cargo bench --no-run`, dual replay
-byte-compare, CLI scenarios, Python smoke, and `scripts/verify_final.sh`.
+## Final phase gates
+
+```bash
+cargo test --workspace --release
+cargo bench --workspace --no-run
+./scripts/verify_final.sh
+```
+
+`verify_final.sh` additionally runs:
+
+- Deterministic replay twice + byte compare (`basic_cross`)
+- CLI strategy-replay smoke
+- Multi-symbol replay smoke
+- Python baseline smoke
+- Chart script smoke (if matplotlib available)
+- `git diff --check`
+
+## Phase 8 deliverables
+
+| Deliverable | Path |
+| --- | --- |
+| README | `README.md` |
+| Architecture | `docs/architecture.md`, `docs/architecture.mmd` |
+| Topic docs | `docs/portfolio.md`, `docs/risk.md`, `docs/strategies.md`, `docs/performance.md`, `docs/demo.md` |
+| Benchmark template | `docs/benchmark_report.md` |
+| Updated replay/design notes | `docs/replay.md`, `docs/design_notes.md` |
+| Dashboard shell | `docs/artifacts/dashboard.html` |
+| Demo script | `scripts/demo.sh` |
+| Verify script | `scripts/verify_final.sh` |
+| CI workflow | `.github/workflows/ci.yml` |
+
+## Post-completion
+
+- User review of portfolio materials
+- Optional: populate `out/bench_summary.json` and regenerate charts on target demo machine
+- Optional: commit and open PR when requested

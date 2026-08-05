@@ -1,6 +1,6 @@
 # Deterministic replay
 
-Replay processes explicit, ordered JSONL events through the same `MatchingEngine` used by normal order entry. Each non-empty line contains one object. Blank lines are ignored; malformed lines report their physical line number.
+Replay processes explicit, ordered JSONL events through the matching engine (single-symbol `ReplayDriver`) or the multi-symbol `Runtime` (CLI `--multi` or multiple symbols in input). Each non-empty line contains one object. Blank lines are ignored; malformed lines report their physical line number.
 
 ## Input schema
 
@@ -28,6 +28,8 @@ Cancel:
 
 ## Output schema
 
+### ReplayDriver (single-symbol)
+
 Output records retain the triggering input's `seq` and `ts_ns`. One input may emit multiple records.
 
 | `kind` | Payload |
@@ -38,11 +40,45 @@ Output records retain the triggering input's `seq` and `ts_ns`. One input may em
 | `cancelled` | `order_id` |
 | `expired` | `order_id`, unfilled `remaining` quantity |
 
+### Runtime (multi-symbol / `--multi`)
+
+Same kinds plus:
+
+| `kind` | Payload |
+| --- | --- |
+| `risk_rejected` | optional `order_id`, `reason` (risk) |
+| `strategy_commands_dropped` | `strategy_id`, `dropped` count |
+
 ```json
 {"seq":2,"ts_ns":200,"kind":"trade","trade":{"symbol":"AAPL","taker_order_id":1002,"maker_order_id":1001,"price":10000,"qty":10,"aggressor_side":"Buy","timestamp_ns":200}}
 ```
 
 Resting and fill execution reports are normalized into replay outputs: accepted orders emit `accepted`, each fill emits one `trade`, and an unfilled market remainder emits `expired`. A limit residual is represented in the final book snapshot rather than a separate replay event.
+
+## CLI commands
+
+Single-symbol replay (Week 5 path):
+
+```bash
+cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl
+cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl --summary-only
+cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl --book
+cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl --output out/events.jsonl
+```
+
+Multi-symbol runtime replay:
+
+```bash
+cargo run --release --bin engine-cli -- replay data/scenarios/multi_symbol_interleaved.jsonl --multi --summary-only
+```
+
+Strategy replay (runtime + built-in strategy):
+
+```bash
+cargo run --release --bin engine-cli -- strategy-replay data/scenarios/market_making_seed.jsonl --strategy market_making
+```
+
+Stdout carries JSONL events (unless `--summary-only`); stderr carries summaries and optional `--book` / `--portfolio` JSON.
 
 ## Determinism guarantees
 
@@ -51,19 +87,19 @@ Resting and fill execution reports are normalized into replay outputs: accepted 
 - Bid/ask ladders use ordered maps; price levels use FIFO queues.
 - Trades execute best price first, then oldest resting order, at the resting price.
 - Prices use integer ticks; no floating-point comparisons or JSON values are introduced.
-- Event and trade timestamps come from replay input; no wall clock is read.
-- IDs come from replay input; no random IDs are generated.
+- Event and trade timestamps come from replay input; no wall clock is read in engine paths.
+- IDs come from replay input (or runtime counters for strategy orders); no random IDs are generated.
 - Output vectors and book snapshots have stable ordering and serde field order.
-- The replay driver delegates matching and cancellation to `MatchingEngine`.
+- Two identical replays produce identical stdout bytes (verified in `scripts/verify_final.sh`).
 
 ## Sequence-number rules
 
-Sequence numbers may start at any `u64` value but must strictly increase across the lifetime of a `ReplayDriver`.
+Sequence numbers may start at any `u64` value but must strictly increase across the lifetime of a `ReplayDriver` or `Runtime` session.
 
-- Equal adjacent/current values return `ReplayError::DuplicateSequence`.
-- A lower value returns `ReplayError::OutOfOrderSequence`.
-- The complete batch is validated before matching starts.
-- A sequence failure emits no output, leaves the book unchanged, and does not advance the driver's last sequence.
+- Equal adjacent/current values return duplicate-sequence errors.
+- A lower value returns out-of-order-sequence errors.
+- The complete batch is validated before matching starts (replay driver).
+- A sequence failure emits no output, leaves state unchanged, and does not advance the last sequence.
 
 ## Scenario suite
 
@@ -82,30 +118,42 @@ Successful scenarios compare exact `.out.jsonl` files. Fatal sequence scenarios 
 | `duplicate_seq_rejected` | Sequence 1 followed by sequence 1 | Duplicate detection and atomic failure |
 | `out_of_order_seq_rejected` | Sequence 2 followed by sequence 1 | Monotonic ordering and atomic failure |
 
+### Strategy and multi-symbol scenarios
+
+| Scenario | Path | What it proves |
+| --- | --- | --- |
+| `market_making_seed` | `strategy-replay --strategy market_making` | Deterministic strategy quotes |
+| `momentum_seed` | `strategy-replay --strategy momentum` | Deterministic momentum signals |
+| `multi_symbol_interleaved` | `replay --multi` | Per-symbol isolation, shared portfolio |
+
 ## Add a scenario
 
 1. Add a minimal input under `data/scenarios/<name>.jsonl` with fixed IDs and timestamps.
 2. Add `data/expected/<name>.out.jsonl`, or `<name>.err.txt` for a fatal replay error.
-3. Add a test to `crates/engine/tests/deterministic_replay.rs` using the shared success or error helper.
+3. Add a test to `crates/engine/tests/deterministic_replay.rs` (matching goldens) or the appropriate integration test for runtime/strategy scenarios.
 4. Assert final snapshot or typed-error state when output alone does not prove the invariant.
 5. Add the scenario to the table above.
 6. Run:
 
 ```bash
 cargo test -p engine --test deterministic_replay
-cargo test
+cargo test --workspace --all-targets --all-features
 cargo fmt --check
-cargo clippy -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 Do not update a golden merely to accept unexplained behavior. Diagnose mismatches and fix a real engine/replay defect when one exists.
 
 ## Known limitations
 
-- One `MatchingEngine` and symbol are used per driver; the CLI infers the symbol from the first event.
-- The parser and driver hold a complete replay batch in memory for atomic sequence validation.
-- Empty CLI input cannot supply a symbol and is rejected, although the driver itself supports an empty batch.
-- There is no streaming replay, checkpointing, schema version negotiation, or backward-compatibility migration layer.
-- There is no live exchange adapter or persistence layer.
-- Strategy, risk, portfolio, and P&L modules are not connected to the replay path.
-- Replay is a correctness tool, not evidence of profitability or production trading readiness.
+- Batch replay validates and holds the complete input in memory; no streaming or checkpoint resume.
+- Replay schemas are not versioned; no migration layer.
+- No live exchange adapter or persistence layer.
+- Strategy replay requires a registered built-in strategy name.
+- Replay is a correctness and demonstration tool, not evidence of profitability or production trading readiness.
+
+## See also
+
+- [architecture.md](./architecture.md) — ReplayDriver vs Runtime
+- [demo.md](./demo.md) — walkthrough commands
+- [strategies.md](./strategies.md) — strategy-replay
