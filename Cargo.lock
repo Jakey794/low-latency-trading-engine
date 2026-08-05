@@ -330,6 +330,7 @@ dependencies = [
  "anyhow",
  "clap",
  "engine",
+ "serde",
  "serde_json",
  "tracing-subscriber",
 ]

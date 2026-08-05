@@ -216,4 +216,53 @@ proptest! {
         prop_assert!(engine.book().get_order(1).is_none());
         prop_assert!(engine.book().get_order(2).is_some());
     }
+
+    #[test]
+    fn portfolio_cash_position_conservation_round_trip(
+        px in 50i64..150,
+        qty in 1u64..10,
+    ) {
+        let start = 1_000_000i128;
+        let mut portfolio = Portfolio::new(start);
+        let sym = Symbol("AAPL".into());
+        portfolio
+            .apply_fill(&sym, Side::Buy, PriceTicks(px), Qty(qty))
+            .unwrap();
+        portfolio
+            .apply_fill(&sym, Side::Sell, PriceTicks(px), Qty(qty))
+            .unwrap();
+        prop_assert_eq!(portfolio.position_qty(&sym), 0);
+        prop_assert_eq!(portfolio.realized_pnl(), 0);
+        prop_assert_eq!(portfolio.cash(), start);
+    }
+
+    #[test]
+    fn symbol_isolation_positions(qa in 1u64..5, qb in 1u64..5) {
+        let mut portfolio = Portfolio::new(1_000_000);
+        let a = Symbol("AAPL".into());
+        let b = Symbol("MSFT".into());
+        portfolio
+            .apply_fill(&a, Side::Buy, PriceTicks(100), Qty(qa))
+            .unwrap();
+        portfolio
+            .apply_fill(&b, Side::Sell, PriceTicks(200), Qty(qb))
+            .unwrap();
+        prop_assert_eq!(portfolio.position_qty(&a), qa as i64);
+        prop_assert_eq!(portfolio.position_qty(&b), -(qb as i64));
+        portfolio
+            .apply_fill(&a, Side::Sell, PriceTicks(100), Qty(qa))
+            .unwrap();
+        prop_assert_eq!(portfolio.position_qty(&a), 0);
+        prop_assert_eq!(portfolio.position_qty(&b), -(qb as i64));
+    }
+
+    #[test]
+    fn deterministic_replay_byte_identical(ops in arb_ops()) {
+        fn run(ops: &[GenOp]) -> String {
+            let engine = apply_ops(ops);
+            let snap = engine.book().snapshot(usize::MAX);
+            serde_json::to_string(&snap).unwrap()
+        }
+        prop_assert_eq!(run(&ops), run(&ops));
+    }
 }

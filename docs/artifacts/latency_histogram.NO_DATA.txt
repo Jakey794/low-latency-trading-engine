@@ -1,2 +1,0 @@
-latency_histogram.png was not generated: no latency samples in out/bench_summary.json.
-Run Criterion benchmarks and write bench_summary.json, then rerun scripts/generate_charts.py.

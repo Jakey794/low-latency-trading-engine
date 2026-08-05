@@ -23,3 +23,8 @@ proptest = "1"
 [[bench]]
 name = "engine_hot_path"
 harness = false
+
+[[bench]]
+name = "order_pool_bench"
+harness = false
+required-features = ["order_pool"]

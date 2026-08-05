@@ -13,6 +13,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Check formatting
         run: cargo fmt --check
@@ -26,5 +28,50 @@ jobs:
       - name: Run release tests
         run: cargo test --workspace --release
 
+      - name: Elite feature tests
+        run: cargo test --workspace --features order_pool,lockfree_queue
+
       - name: Compile benchmarks
         run: cargo bench --workspace --no-run
+
+      - name: Compile order-pool bench
+        run: cargo bench --workspace --no-run --features order_pool
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python baseline smoke
+        run: python python/baseline_lob.py --events 1000
+
+      - name: Validate committed benchmark JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("docs/benchmarks/latest.json")
+          assert p.is_file(), "missing docs/benchmarks/latest.json"
+          data = json.loads(p.read_text())
+          assert data.get("schema_version") == 1
+          assert "workloads" in data and len(data["workloads"]) >= 5
+          text = p.read_text().lower()
+          for bad in ("placeholder", "fabricat", "dummy latency"):
+              assert bad not in text, bad
+          print("benchmark JSON OK")
+          PY
+
+      - name: Validate chart PNG headers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          magic = b"\x89PNG\r\n\x1a\n"
+          for name in ("latency_histogram.png", "throughput_chart.png", "rust_vs_python.png"):
+              path = Path("docs/artifacts") / name
+              assert path.is_file() and path.stat().st_size >= 1000, path
+              assert path.read_bytes()[:8] == magic, path
+          assert Path("docs/artifacts/architecture.svg").is_file()
+          assert Path("docs/artifacts/profile_summary.md").is_file()
+          assert Path("docs/artifacts/sample_profile.txt").is_file() or Path("docs/artifacts/flamegraph.svg").is_file()
+          print("artifacts OK")
+          PY

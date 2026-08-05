@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trading Engine — Portfolio Dashboard</title>
+  <title>Trading Engine — Benchmark Dashboard</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -16,158 +16,105 @@
     }
     * { box-sizing: border-box; }
     body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: var(--bg);
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      background: linear-gradient(160deg, #0f1419 0%, #15202b 50%, #0f1419 100%);
       color: var(--text);
-      line-height: 1.6;
+      line-height: 1.55;
       margin: 0;
       padding: 2rem;
-      max-width: 960px;
+      max-width: 980px;
       margin-inline: auto;
     }
-    h1, h2 { color: var(--text); }
-    h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
-    .subtitle { color: var(--muted); margin-top: 0; }
+    h1 { font-size: 1.85rem; margin-bottom: 0.2rem; letter-spacing: -0.02em; }
+    .subtitle { color: var(--muted); margin-top: 0; font-family: ui-sans-serif, system-ui, sans-serif; }
     section {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 4px;
       padding: 1.25rem 1.5rem;
       margin-bottom: 1.25rem;
     }
     .disclaimer {
       border-left: 4px solid var(--warn);
-      padding-left: 1rem;
       color: var(--muted);
       font-size: 0.95rem;
+      font-family: ui-sans-serif, system-ui, sans-serif;
     }
-    ul { padding-left: 1.25rem; }
-    a { color: var(--accent); }
-    .placeholder {
-      background: var(--bg);
-      border: 1px dashed var(--border);
-      border-radius: 6px;
-      padding: 2rem;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-    }
-    @media (max-width: 640px) {
-      .grid { grid-template-columns: 1fr; }
-    }
-    code {
-      background: var(--bg);
-      padding: 0.15em 0.4em;
+    img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
       border-radius: 4px;
+      background: #fff;
+    }
+    a { color: var(--accent); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--bg);
+      padding: 0.12em 0.35em;
+      border-radius: 3px;
       font-size: 0.88em;
     }
-    footer { color: var(--muted); font-size: 0.85rem; margin-top: 2rem; }
+    ul { font-family: ui-sans-serif, system-ui, sans-serif; }
+    footer { color: var(--muted); font-size: 0.85rem; margin-top: 2rem; font-family: ui-sans-serif, system-ui, sans-serif; }
   </style>
 </head>
 <body>
   <header>
     <h1>Low-Latency Event-Driven Trading Engine</h1>
-    <p class="subtitle">Portfolio dashboard — correctness-first simulated trading stack</p>
+    <p class="subtitle">Measured local report — correctness-first portfolio project</p>
   </header>
 
   <section class="disclaimer">
-    <strong>Disclosure:</strong> This is an educational portfolio project. Not investment advice.
-    No profitability claims. No exchange-grade latency claims. Benchmark numbers are
-    machine-specific — regenerate on your hardware.
+    <strong>Disclosure:</strong> Educational portfolio project. Not investment advice.
+    No profitability claims. No exchange-grade or HFT latency claims.
+    Charts below are generated from <code>docs/benchmarks/latest.json</code> on the machine listed in that file.
   </section>
 
   <section>
     <h2>Architecture</h2>
-    <p>Event-driven pipeline: JSONL replay → Runtime (router, risk, portfolio, strategies) → per-symbol matching engines → ordered outputs.</p>
+    <p><a href="../architecture.md">architecture.md</a> ·
+       <a href="../architecture.mmd">architecture.mmd</a> ·
+       <a href="./architecture.svg">architecture.svg</a></p>
+    <img src="./architecture.svg" alt="Engine architecture diagram">
+  </section>
+
+  <section>
+    <h2>Latency (measured)</h2>
+    <img src="./latency_histogram.png" alt="Latency percentile histogram from measured data">
+  </section>
+
+  <section>
+    <h2>Throughput by workload (measured)</h2>
+    <img src="./throughput_chart.png" alt="Throughput by workload chart from measured data">
+  </section>
+
+  <section>
+    <h2>Rust vs naive Python baseline (measured)</h2>
+    <img src="./rust_vs_python.png" alt="Rust versus naive Python events per second">
+    <p>Python is a naive correctness-oriented baseline, not an optimized competitor.</p>
+  </section>
+
+  <section>
+    <h2>Profiling</h2>
     <ul>
-      <li><a href="../architecture.md">Full architecture doc</a></li>
-      <li><a href="../architecture.mmd">Mermaid source</a></li>
-      <li>Crates: <code>engine</code>, <code>engine-cli</code></li>
+      <li><a href="./profile_summary.md">profile_summary.md</a> — macOS <code>sample</code> fallback</li>
+      <li><a href="./sample_profile.txt">sample_profile.txt</a> — genuine sampled stacks</li>
+      <li>Flamegraph SVG requires full Xcode/<code>xctrace</code> on this host (documented; not fabricated)</li>
     </ul>
   </section>
 
   <section>
-    <h2>Feature highlights</h2>
+    <h2>Source data</h2>
     <ul>
-      <li>Limit order book with price-time priority</li>
-      <li>Deterministic JSONL replay + golden tests</li>
-      <li>Portfolio P&amp;L (average cost, i128)</li>
-      <li>Pre-trade risk + kill switch</li>
-      <li>Market-making &amp; momentum demo strategies</li>
-      <li>Multi-symbol replay</li>
-      <li>Criterion benchmarks, Python baseline, proptest</li>
-      <li>Elite experiments: order pool, lock-free queue (feature-gated)</li>
-    </ul>
-  </section>
-
-  <section>
-    <h2>Throughput (placeholder)</h2>
-    <div class="placeholder">
-      <p><strong>docs/artifacts/throughput_by_workload.png</strong></p>
-      <p>Run <code>BENCH_FULL=1 cargo bench -p engine --bench engine_hot_path</code>,<br>
-      populate <code>out/bench_summary.json</code>, then <code>python3 scripts/generate_charts.py</code></p>
-    </div>
-  </section>
-
-  <section>
-    <h2>Latency (placeholder)</h2>
-    <div class="placeholder">
-      <p><strong>docs/artifacts/latency_histogram.png</strong></p>
-      <p>Percentiles from hdrhistogram (bench/metrics path only).<br>
-      See <a href="../benchmark_report.md">benchmark report</a> for regeneration steps.</p>
-    </div>
-  </section>
-
-  <section>
-    <h2>Rust vs Python baseline (placeholder)</h2>
-    <div class="placeholder">
-      <p><strong>docs/artifacts/rust_vs_python.png</strong></p>
-      <p><code>python3 python/baseline_lob.py --events 10000</code> for naive baseline JSON.</p>
-    </div>
-  </section>
-
-  <section>
-    <h2>Quick commands</h2>
-    <div class="grid">
-      <div>
-        <strong>Verify</strong>
-        <pre><code>./scripts/verify_final.sh</code></pre>
-      </div>
-      <div>
-        <strong>Demo</strong>
-        <pre><code>./scripts/demo.sh</code></pre>
-      </div>
-      <div>
-        <strong>Replay</strong>
-        <pre><code>cargo run --release --bin engine-cli -- \
-  replay data/scenarios/basic_cross.jsonl</code></pre>
-      </div>
-      <div>
-        <strong>Strategy</strong>
-        <pre><code>cargo run --release --bin engine-cli -- \
-  strategy-replay ... --strategy market_making</code></pre>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Limitations</h2>
-    <ul>
-      <li>No live exchange connectivity or real capital</li>
-      <li>No persistence or production deployment model</li>
-      <li>Batch replay (full input in memory)</li>
-      <li>Demonstration strategies only</li>
-      <li>Benchmarks are environment-specific microbenchmarks</li>
+      <li><a href="../benchmarks/latest.json">benchmarks/latest.json</a></li>
+      <li><a href="../benchmark_report.md">benchmark_report.md</a></li>
+      <li><a href="../RELEASE_NOTES.md">RELEASE_NOTES.md</a></li>
     </ul>
   </section>
 
   <footer>
-    Generated shell for portfolio review. Update artifacts after running benchmarks on your machine.
+    Regenerate: <code>cargo run --release -p engine-cli --bin measure &amp;&amp; .venv/bin/python scripts/generate_charts.py</code>
   </footer>
 </body>
 </html>

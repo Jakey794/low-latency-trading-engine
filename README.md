@@ -165,74 +165,93 @@ cargo run --release --bin engine-cli -- strategy-replay \
 
 Expect elevated `risk_rejected` counts; rejected orders do not mutate the book or portfolio. Kill-switch behavior is covered in integration tests — see [docs/risk.md](docs/risk.md).
 
-## Benchmarks
+## Benchmarks and measured results
 
-Compile benchmarks (CI-safe, no long measurements):
+Collect genuine latency/throughput JSON (hdrhistogram; release profile):
+
+```bash
+cargo run --release -p engine-cli --bin measure
+```
+
+Writes `docs/benchmarks/latest.json` and `out/bench_summary.json`.
+
+Generate charts from measured data (requires venv + matplotlib):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r python/requirements.txt
+python scripts/generate_charts.py
+```
+
+Compile Criterion benches (CI-safe):
 
 ```bash
 cargo bench --workspace --no-run
 ```
 
-Smoke run (exits immediately unless opted in):
+Full Criterion companion measurements:
 
 ```bash
-cargo bench -p engine --bench engine_hot_path
+BENCH_FULL=1 cargo bench --workspace
 ```
 
-Full Criterion measurements (machine-specific; can take minutes):
+### Sample local results (Apple M4 Pro, 24 GiB, macOS 26.5.2, rustc 1.96.0)
 
-```bash
-BENCH_FULL=1 cargo bench -p engine --bench engine_hot_path
-```
+| Workload | p50 | Events/s (approx) |
+| --- | --- | --- |
+| cancel_resting_order | 83 ns | 3.1M |
+| core_engine_10k | 125 ns | 4.6M |
+| core_engine_100k | 166 ns | 2.3M |
+| multi_level_sweep | 375 ns | 0.83M |
+| Naive Python 10k baseline | — | 1.2M |
 
-Optional: write `out/bench_summary.json` from bench helpers, then generate charts:
+Source of truth: [`docs/benchmarks/latest.json`](docs/benchmarks/latest.json). Charts:
+[`docs/artifacts/latency_histogram.png`](docs/artifacts/latency_histogram.png),
+[`docs/artifacts/throughput_chart.png`](docs/artifacts/throughput_chart.png),
+[`docs/artifacts/rust_vs_python.png`](docs/artifacts/rust_vs_python.png).
+Dashboard: [`docs/artifacts/dashboard.html`](docs/artifacts/dashboard.html).
 
-```bash
-python3 scripts/generate_charts.py
-```
+These figures are **local and machine-specific**. They are **not** exchange-grade or HFT claims.
 
 See [docs/performance.md](docs/performance.md) and [docs/benchmark_report.md](docs/benchmark_report.md).
 
 ## Profiling
 
-Flamegraph helper (documents blockers if tools or permissions are missing):
-
 ```bash
-chmod +x scripts/profile_flamegraph.sh
 ./scripts/profile_flamegraph.sh
 ```
 
-Manual attempt after installing `cargo-flamegraph`:
-
-```bash
-BENCH_FULL=1 cargo flamegraph --bench engine_hot_path -o docs/artifacts/flamegraph.svg
-```
-
-Profiling uses wall-clock time and is **not** part of deterministic engine behavior.
+On this macOS host, `cargo flamegraph` requires full Xcode/`xctrace`. The committed
+fallback is a genuine `/usr/bin/sample` profile:
+[`docs/artifacts/sample_profile.txt`](docs/artifacts/sample_profile.txt) and
+[`docs/artifacts/profile_summary.md`](docs/artifacts/profile_summary.md).
 
 ## Python baseline
 
 Naive dict/list limit order book for relative throughput comparison:
 
 ```bash
-python3 python/baseline_lob.py --events 10000
+.venv/bin/python python/baseline_lob.py --events 10000
+# or: python3 python/baseline_lob.py --events 10000
 ```
 
-Optional dependencies: `pip install -r python/requirements.txt` (matplotlib only needed for chart generation).
+Clearly labeled as a **naive correctness-oriented baseline**, not an optimized competitor.
 
 ## Chart generation
 
 ```bash
-python3 scripts/generate_charts.py
+.venv/bin/python scripts/generate_charts.py
 ```
 
-Writes PNGs under `docs/artifacts/` when `out/bench_summary.json` exists; otherwise creates clearly labeled placeholders (no fabricated numbers).
+Requires measured `docs/benchmarks/latest.json` (rejects placeholders / missing data).
 
 ## Documentation map
 
 | Document | Contents |
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | Full system architecture |
+| [docs/architecture.mmd](docs/architecture.mmd) | Mermaid source |
+| [docs/artifacts/architecture.svg](docs/artifacts/architecture.svg) | Rendered diagram |
 | [docs/portfolio.md](docs/portfolio.md) | Portfolio accounting model |
 | [docs/risk.md](docs/risk.md) | Risk limits and kill switch |
 | [docs/strategies.md](docs/strategies.md) | Strategy plugin interface and demos |
@@ -240,8 +259,9 @@ Writes PNGs under `docs/artifacts/` when `out/bench_summary.json` exists; otherw
 | [docs/demo.md](docs/demo.md) | Step-by-step demo walkthrough |
 | [docs/replay.md](docs/replay.md) | Replay formats and scenarios |
 | [docs/design_notes.md](docs/design_notes.md) | Design principles and tradeoffs |
-| [docs/benchmark_report.md](docs/benchmark_report.md) | Benchmark report template |
-| [docs/artifacts/dashboard.html](docs/artifacts/dashboard.html) | Static report shell |
+| [docs/benchmark_report.md](docs/benchmark_report.md) | Measured benchmark report |
+| [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) | Release summary |
+| [docs/artifacts/dashboard.html](docs/artifacts/dashboard.html) | Static measured report |
 
 ## Limitations
 
@@ -252,18 +272,21 @@ Writes PNGs under `docs/artifacts/` when `out/bench_summary.json` exists; otherw
 - **Integer ticks only:** no floating-point prices in the matching path.
 - **Batch replay:** full input validated in memory; no streaming checkpoint resume.
 - **Elite modules are experimental:** `order_pool` and `lockfree_queue` are isolated behind features.
+- **Order pool:** measured **worse** than Vec churn on this host; not default-integrated.
+- **Flamegraph:** may require full Xcode on macOS; `sample` profile is the committed fallback.
 
 ## Future work
 
 - Schema versioning and migration for replay JSONL
-- Additional strategy examples and property tests on runtime paths
-- Richer benchmark export pipeline into `out/bench_summary.json`
+- Additional strategy property tests on runtime paths
 - Optional persistence and audit log for replay outputs
-- Further elite experiments (always behind features, never in the default path)
+- Further elite experiments (always behind features)
 
 ## Machine disclosure
 
-Benchmark latency, throughput, and Python baseline numbers depend on CPU, OS, and compiler version. Results in [docs/benchmark_report.md](docs/benchmark_report.md) and generated charts are **machine-specific**. Regenerate on your hardware with the commands above; do not treat any sample numbers as universal performance guarantees.
+Results above were collected on **Apple M4 Pro / 24 GiB / macOS 26.5.2 / rustc 1.96.0**.
+Regenerate on your hardware with `measure` + chart scripts. Do not treat sample numbers
+as universal performance guarantees.
 
 ## License
 

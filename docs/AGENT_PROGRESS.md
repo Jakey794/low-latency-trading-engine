@@ -4,31 +4,25 @@
 
 **COMPLETE**
 
-## Baseline (2026-08-05)
-
-Week 5 baseline green on `complete-elite-engine` @ `99912bd`.
-
-## Completed phases
-
-1. Portfolio and P&L — average-cost, cash, realized/unrealized, equity, snapshots
-2. Risk limits and kill switch — pre-trade checks, manual/auto kill, cancels allowed
-3. Runtime + strategy plugin — bounded intents, risk gating, deterministic IDs
-4. Market-making + momentum demos + CLI `strategy-replay`
-5. Multi-symbol runtime replay + isolation tests
-6. Criterion benches, hdrhistogram metrics, Python baseline, chart scripts
-7. proptest properties, order_pool + lockfree_queue elite features
-8. Docs, dashboard, CI, `scripts/demo.sh`, `scripts/verify_final.sh`
-
 ## Final verification
 
-`scripts/verify_final.sh` — **PASSED** (2026-08-05)
+`scripts/verify_final.sh` — **PASSED**
 
-## Environment-only blockers / manual artifacts
+## What was finished in this pass
 
-- **Flamegraph**: `cargo-flamegraph` / dtrace entitlements may be unavailable on this macOS host. See `scripts/profile_flamegraph.sh`. Do not fabricate SVG.
-- **Charts with real bench data**: run `BENCH_FULL=1 cargo bench`, write `out/bench_summary.json`, then `python3 scripts/generate_charts.py` after `pip install -r python/requirements.txt`. Placeholder PNGs exist under `docs/artifacts/` labeled when no measured data.
-- **matplotlib**: optional; verify script skips charts if missing.
+- Genuine `docs/benchmarks/latest.json` via release `measure` harness
+- Real charts (latency, throughput, rust vs python) from measured data
+- Rendered `docs/artifacts/architecture.svg`
+- macOS `sample` profiler artifact + `profile_summary.md` (flamegraph blocked by missing full Xcode/`xctrace`)
+- Python `.venv` workflow; naive baseline recorded in JSON
+- Order-pool before/after Criterion: **worse** than Vec churn; kept isolated
+- Hardened `verify_final.sh`, CI artifact checks, README measured results, `RELEASE_NOTES.md`
+- Additional proptest cases (portfolio conservation, symbol isolation, deterministic snapshots)
+
+## Remaining environment restriction (documented, not blocking)
+
+Flamegraph SVG requires full Xcode/`xctrace`. Genuine `/usr/bin/sample` output is committed instead. Retry command is in `docs/artifacts/profile_summary.md`.
 
 ## Exact next action
 
-None for completion gates. Optional: generate measured bench report on a disclosed machine.
+None for completion gates.

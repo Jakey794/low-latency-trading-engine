@@ -78,7 +78,8 @@ Reads `out/bench_summary.json` when present; writes:
 - `docs/artifacts/throughput_by_workload.png`
 - `docs/artifacts/rust_vs_python.png`
 
-Missing data produces placeholder charts or `latency_histogram.NO_DATA.txt` — never fabricated measured results.
+Charts are generated only from measured `docs/benchmarks/latest.json`. The chart
+script rejects missing metadata and refuses to invent latency values.
 
 ## Profiling and flamegraphs
 

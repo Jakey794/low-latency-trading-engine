@@ -140,7 +140,8 @@ chmod +x scripts/verify_final.sh
 
 ## 12. Static dashboard
 
-Open [artifacts/dashboard.html](./artifacts/dashboard.html) in a browser for a summary shell with links to architecture and artifact placeholders.
+Open [artifacts/dashboard.html](./artifacts/dashboard.html) for the measured report dashboard
+(charts, architecture SVG, and profiler links).
 
 ## What to tell reviewers
 
