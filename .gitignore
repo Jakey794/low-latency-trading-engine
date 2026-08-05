@@ -1,4 +1,6 @@
 target/
-.DS_Store
-
 out/
+**/criterion/
+__pycache__/
+.DS_Store
+flamegraph.svg

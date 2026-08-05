@@ -1,4 +1,5 @@
 pub mod book;
+pub mod elite;
 pub mod events;
 pub mod matching;
 pub mod metrics;
