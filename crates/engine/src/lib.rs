@@ -5,5 +5,6 @@ pub mod metrics;
 pub mod portfolio;
 pub mod replay;
 pub mod risk;
+pub mod runtime;
 pub mod strategy;
 pub mod types;
