@@ -222,10 +222,7 @@ impl ReplayDriver {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{
@@ -233,8 +230,6 @@ mod tests {
         replay::ReplayEventKind,
         types::{Order, OrderType, PriceTicks, Qty, Side, Symbol},
     };
-
-    static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
     fn symbol() -> Symbol {
         Symbol("AAPL".to_owned())
@@ -572,19 +567,14 @@ mod tests {
 
     #[test]
     fn replay_file_parses_and_executes_jsonl() {
-        let file_number = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "engine-replay-{}-{file_number}.jsonl",
-            std::process::id()
-        ));
-        let json = r#"{"seq":1,"ts_ns":100,"kind":"new_order","order":{"order_id":10,"symbol":"AAPL","side":"Buy","order_type":"Limit","price":100,"qty":5,"timestamp_ns":10,"strategy_id":null}}
-"#;
-        fs::write(&path, json).unwrap();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("data/scenarios/basic_cross.jsonl");
 
         let result = driver().replay_file(&path).unwrap();
-        fs::remove_file(&path).unwrap();
 
-        assert_eq!(result.summary.input_events, 1);
-        assert_eq!(result.summary.accepted, 1);
+        assert_eq!(result.summary.input_events, 2);
+        assert_eq!(result.summary.accepted, 2);
+        assert_eq!(result.summary.trades, 1);
     }
 }
