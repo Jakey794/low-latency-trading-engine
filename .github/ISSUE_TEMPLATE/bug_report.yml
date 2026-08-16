@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem in the local engine or its documentation.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, personal data, or security-sensitive details.
+        Please use the private security-reporting flow for vulnerabilities.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the command, scenario file, and a redacted output excerpt.
+      placeholder: |
+        cargo run --release --bin engine-cli -- replay data/scenarios/basic_cross.jsonl
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Commit or release
+      description: The commit SHA or tag where you observed the problem.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, and relevant feature flags.

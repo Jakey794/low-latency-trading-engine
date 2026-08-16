@@ -1,10 +1,17 @@
 [package]
 name = "engine-cli"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "CLI demos and deterministic replay tools for the event-driven trading engine."
+keywords = ["trading", "order-book", "replay"]
+categories = ["command-line-utilities", "simulation", "finance"]
 
 [dependencies]
-engine = { path = "../engine" }
+engine = { path = "../engine", version = "0.1.0" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

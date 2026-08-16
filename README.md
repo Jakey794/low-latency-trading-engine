@@ -1,5 +1,7 @@
 # Low-Latency Event-Driven Trading Engine
 
+[![CI](https://github.com/Jakey794/low-latency-trading-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Jakey794/low-latency-trading-engine/actions/workflows/ci.yml)
+
 A portfolio-quality Rust event-driven trading engine focused on **deterministic behavior**, **market-microstructure correctness**, explicit invariants, and reproducible tests. The project name describes the domain; it does **not** claim measured low latency or exchange-grade performance.
 
 ## Pitch
@@ -317,4 +319,7 @@ as universal performance guarantees.
 
 ## License
 
-See repository license file if present; otherwise treat as portfolio source for review purposes.
+Licensed under the [MIT License](LICENSE). See [CONTRIBUTING.md](CONTRIBUTING.md)
+for development and contribution guidance, [SECURITY.md](SECURITY.md) for
+vulnerability reporting, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for
+community expectations.

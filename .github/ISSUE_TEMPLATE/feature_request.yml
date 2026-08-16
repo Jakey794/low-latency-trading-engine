@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest a focused, testable improvement.
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Explain the user or engineering need.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe a focused solution and relevant alternatives.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safeguards
+    attributes:
+      label: Scope check
+      options:
+        - label: This proposal does not introduce live trading, real-capital integration, or unsupported performance claims.
+          required: true
