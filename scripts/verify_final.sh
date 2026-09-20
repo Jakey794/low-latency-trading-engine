@@ -151,7 +151,7 @@ echo "--- Documentation presence ---"
 for f in README.md docs/architecture.md docs/architecture.mmd docs/portfolio.md docs/risk.md \
   docs/strategies.md docs/replay.md docs/performance.md docs/profiling.md docs/benchmark_report.md \
   docs/benchmark-report.md docs/demo.md docs/design_notes.md docs/design-decisions.md \
-  docs/RELEASE_NOTES.md docs/AGENT_PROGRESS.md data/config/risk_demo.json \
+  docs/RELEASE_NOTES.md data/config/risk_demo.json \
   data/scenarios/paper_ws_demo.jsonl; do
   [[ -f "$f" ]] || fail "missing $f"
 done

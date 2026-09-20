@@ -8,8 +8,8 @@ behavior and must not add real-money or live-exchange functionality.
 
 1. Keep changes focused and explain the behavior they change.
 2. Add or update tests for every behavior change.
-3. Preserve the project invariants described in `AGENTS.md` and the
-   architecture documentation.
+3. Preserve the project invariants described in the
+   [architecture documentation](docs/architecture.md).
 4. Run the full local verification gate:
 
    ```bash
